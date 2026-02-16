@@ -25,7 +25,7 @@ class SMACrossover(Strategy):
 
 def main():
     parser = argparse.ArgumentParser(description="Stock Trading Bot Tool")
-    parser.add_argument("--mode", choices=["sync", "backtest", "live"], required=True, help="Mode to run")
+    parser.add_argument("--mode", choices=["sync", "backtest", "live", "snapshot"], required=True, help="Mode to run")
     parser.add_argument("--ticker", type=str, default="AAPL", help="Ticker symbol")
     parser.add_argument("--interval", choices=["1h", "4h", "1d"], default="1d", help="Data interval")
     parser.add_argument("--period", type=str, default="1y", help="Period for sync (e.g. 1y, 1mo)")
@@ -36,6 +36,11 @@ def main():
     if args.mode == "sync":
         engine.sync_data(args.ticker, args.interval, period=args.period)
     
+    elif args.mode == "snapshot":
+        from src.snapshot import DataSnapshot
+        snapshot = DataSnapshot(engine)
+        snapshot.run(interval=args.interval, period="10y")
+
     elif args.mode == "backtest":
         strategy = SMACrossover()
         engine.run_backtest(args.ticker, args.interval, strategy)
