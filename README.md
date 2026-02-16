@@ -39,7 +39,7 @@ The application is controlled via a CLI interface with three primary modes:
 ### 1. Sync Data
 Download historical data for a specific ticker and save it to the local database.
 ```bash
-uv run python main.py --mode sync --ticker AAPL --interval 4h --period 1y
+uv run python stock_bot.py --mode sync --ticker AAPL --interval 4h --period 1y
 ```
 
 ### 2. Snapshot (Bulk Sync)
@@ -51,7 +51,7 @@ The snapshot mode is designed for building a comprehensive local database for th
 - **Auto-Period Scaling**: Respects `yfinance` limits (e.g., 2 years for 1h/4h, 60 days for 15m/30m).
 
 ```bash
-uv run python main.py --mode snapshot
+uv run python stock_bot.py --mode snapshot
 ```
 
 ### 3. Ticker Extraction
@@ -66,13 +66,13 @@ If you have an iShares Russell 1000 ETF holdings Excel file (`.xls`), you can ex
 ### 4. Backtest
 Run a strategy against the data stored in the local database.
 ```bash
-uv run python main.py --mode backtest --ticker AAPL --interval 4h
+uv run python stock_bot.py --mode backtest --ticker AAPL --interval 4h
 ```
 
 ### 3. Live Simulation
 Run a strategy against real-time data updates.
 ```bash
-uv run python main.py --mode live --ticker AAPL --interval 1h
+uv run python stock_bot.py --mode live --ticker AAPL --interval 1h
 ```
 
 ## Strategy Development
@@ -91,4 +91,4 @@ class MyStrategy(Strategy):
 - `src/database.py`: Handles SQLite schema and data persistence.
 - `src/fetcher.py`: Manages yfinance API calls and data resampling.
 - `src/engine.py`: Contains the core logic for backtesting and live execution.
-- `main.py`: CLI entry point and sample strategy implementation.
+- `stock_bot.py`: CLI entry point and sample strategy implementation.
