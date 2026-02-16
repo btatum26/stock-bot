@@ -73,35 +73,38 @@ class DataSnapshot:
         pbar = tqdm(tickers, desc="Overall Progress", unit="ticker")
         
         for ticker in pbar:
-            for interval in intervals:
-                # Check if data is already up to date
-                latest_ts = self.engine.db.get_latest_timestamp(ticker, interval)
-                if latest_ts and latest_ts > six_months_ago:
-                    continue
+            try:
+                for interval in intervals:
+                    # Check if data is already up to date
+                    latest_ts = self.engine.db.get_latest_timestamp(ticker, interval)
+                    if latest_ts and latest_ts > six_months_ago:
+                        continue
 
-                # Adjust period for yfinance limits
-                # 1wk/1d: max
-                # 1h/4h: 730d (2y)
-                # 30m/15m: 60d
-                current_period = period
-                if interval in ["1h", "4h"]:
-                    current_period = "2y"
-                elif interval in ["30m", "15m"]:
-                    current_period = "60d"
-                
-                retries = 3
-                success = False
-                while retries > 0 and not success:
-                    try:
-                        self.engine.sync_data(ticker, interval, period=current_period)
-                        success = True
-                    except Exception as e:
-                        retries -= 1
-                        if retries > 0:
-                            time.sleep(2)
-                        else:
-                            pbar.write(f"Failed to sync {ticker} ({interval}) after multiple attempts.")
-                
-                time.sleep(0.1) # Rate limit protection
+                    # Adjust period for yfinance limits
+                    # 1wk/1d: max
+                    # 1h/4h: 730d (2y)
+                    # 30m/15m: 60d
+                    current_period = period
+                    if interval in ["1h", "4h"]:
+                        current_period = "2y"
+                    elif interval in ["30m", "15m"]:
+                        current_period = "60d"
+                    
+                    retries = 3
+                    success = False
+                    while retries > 0 and not success:
+                        try:
+                            self.engine.sync_data(ticker, interval, period=current_period, quiet=True)
+                            success = True
+                        except Exception as e:
+                            retries -= 1
+                            if retries > 0:
+                                time.sleep(2)
+                            else:
+                                pbar.write(f"Failed to sync {ticker} ({interval}) after multiple attempts.")
+                    
+                    time.sleep(0.1) # Rate limit protection
+            except KeyboardInterrupt:
+                raise # Re-raise to catch in stock_bot.py
 
         print("\nSnapshot complete.")
