@@ -20,13 +20,13 @@ class TradingEngine:
         self.db = Database(db_path)
         self.fetcher = DataFetcher()
 
-    def sync_data(self, ticker, interval, period="1mo"):
+    def sync_data(self, ticker, interval, period="1mo", quiet=False):
         """Downloads data and saves to DB."""
-        print(f"Syncing {ticker} ({interval})...")
+        if not quiet: print(f"\nSyncing {ticker} ({interval})...")
         df = self.fetcher.fetch_historical(ticker, interval, period=period)
         if not df.empty:
             self.db.save_data(df, ticker, interval)
-            print(f"Saved {len(df)} bars.")
+            if not quiet: print(f"Saved {len(df)} bars.")
         else:
             print("No data found.")
 

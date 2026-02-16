@@ -2,6 +2,8 @@ import pandas as pd
 import requests
 from tqdm import tqdm
 import time
+import os
+from datetime import datetime, timedelta
 from .engine import TradingEngine
 
 class DataSnapshot:
@@ -18,6 +20,7 @@ class DataSnapshot:
             with open(local_file, "r") as f:
                 return [line.strip() for line in f if line.strip()]
 
+        # could not find the local file
         tickers = set()
         sources = [
             # S&P 500
@@ -59,29 +62,46 @@ class DataSnapshot:
             
         return final_list
 
-    def run(self, interval="1d", period="10y"):
+    def run(self, period="10y"):
         tickers = self.get_top_1000_tickers()
-        print(f"Starting decade snapshot for {len(tickers)} tickers...")
+        # All supported intervals
+        intervals = ["1w", "1d", "4h"]
+        six_months_ago = datetime.now() - timedelta(days=180)
         
-        # Use tqdm for the "graphic" progress bar
-        pbar = tqdm(tickers, desc="Downloading Market Data", unit="ticker")
+        print(f"Starting decade snapshot for {len(tickers)} tickers across {intervals}...")
+        
+        pbar = tqdm(tickers, desc="Overall Progress", unit="ticker")
         
         for ticker in pbar:
-            retries = 3
-            success = False
-            while retries > 0 and not success:
-                try:
-                    # engine.sync_data already handles saving to DB and basic error printing
-                    self.engine.sync_data(ticker, interval, period=period)
-                    success = True
-                except Exception as e:
-                    retries -= 1
-                    if retries > 0:
-                        time.sleep(2) # Brief wait before retry
-                    else:
-                        pbar.write(f"Failed to sync {ticker} after multiple attempts.")
-            
-            # Rate limiting: small pause to avoid being blocked by Yahoo
-            time.sleep(0.1)
+            for interval in intervals:
+                # Check if data is already up to date
+                latest_ts = self.engine.db.get_latest_timestamp(ticker, interval)
+                if latest_ts and latest_ts > six_months_ago:
+                    continue
+
+                # Adjust period for yfinance limits
+                # 1wk/1d: max
+                # 1h/4h: 730d (2y)
+                # 30m/15m: 60d
+                current_period = period
+                if interval in ["1h", "4h"]:
+                    current_period = "2y"
+                elif interval in ["30m", "15m"]:
+                    current_period = "60d"
+                
+                retries = 3
+                success = False
+                while retries > 0 and not success:
+                    try:
+                        self.engine.sync_data(ticker, interval, period=current_period)
+                        success = True
+                    except Exception as e:
+                        retries -= 1
+                        if retries > 0:
+                            time.sleep(2)
+                        else:
+                            pbar.write(f"Failed to sync {ticker} ({interval}) after multiple attempts.")
+                
+                time.sleep(0.1) # Rate limit protection
 
         print("\nSnapshot complete.")

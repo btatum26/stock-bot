@@ -42,7 +42,28 @@ Download historical data for a specific ticker and save it to the local database
 uv run python main.py --mode sync --ticker AAPL --interval 4h --period 1y
 ```
 
-### 2. Backtest
+### 2. Snapshot (Bulk Sync)
+The snapshot mode is designed for building a comprehensive local database for the Russell 1000 or top market companies.
+- **Source**: Prioritizes `data/tickers.txt` if available; otherwise, it fetches from S&P 500, S&P 400, and NASDAQ 100 sources.
+- **Decade History**: Automatically pulls the last 10 years for weekly/daily bars.
+- **Multi-Interval**: Syncs `1w, 1d, 4h, 1h, 30m, 15m` intervals for every ticker.
+- **Smart Skip**: Checks the database and skips any ticker/interval that is already up to date (within the last 6 months).
+- **Auto-Period Scaling**: Respects `yfinance` limits (e.g., 2 years for 1h/4h, 60 days for 15m/30m).
+
+```bash
+uv run python main.py --mode snapshot
+```
+
+### 3. Ticker Extraction
+If you have an iShares Russell 1000 ETF holdings Excel file (`.xls`), you can extract the exact tickers for the snapshot:
+1. Place the file at `data/iShares-Russell-1000-ETF_fund.xls`.
+2. Run the extraction script:
+   ```bash
+   uv run python extract_tickers.py
+   ```
+3. This creates `data/tickers.txt`, which the snapshot mode will use automatically.
+
+### 4. Backtest
 Run a strategy against the data stored in the local database.
 ```bash
 uv run python main.py --mode backtest --ticker AAPL --interval 4h

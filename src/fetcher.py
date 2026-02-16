@@ -7,17 +7,24 @@ class DataFetcher:
     def fetch_historical(ticker, interval, period="max", start=None, end=None):
         """
         Fetches historical data from yfinance.
+        Intervals: 1w, 1d, 4h, 1h, 30m, 15m
         """
-        yf_interval = interval
-        if interval == "4h":
-            yf_interval = "1h"
+        # Map our internal interval to yfinance interval
+        mapping = {
+            "1w": "1wk",
+            "1d": "1d",
+            "4h": "1h",
+            "1h": "1h",
+            "30m": "30m",
+            "15m": "15m"
+        }
+        yf_interval = mapping.get(interval, "1d")
         
         try:
             stock = yf.Ticker(ticker)
             df = stock.history(interval=yf_interval, period=period, start=start, end=end)
             
             if df is None or df.empty:
-                print(f"Warning: No data found for {ticker} at interval {interval}.")
                 return pd.DataFrame()
 
             if interval == "4h":

@@ -63,6 +63,18 @@ class Database:
         finally:
             session.close()
 
+    def get_latest_timestamp(self, ticker, interval):
+        """Returns the most recent timestamp for a ticker/interval or None."""
+        session = self.Session()
+        try:
+            result = session.query(OHLCV.timestamp).filter_by(
+                ticker=ticker, 
+                interval=interval
+            ).order_by(OHLCV.timestamp.desc()).first()
+            return result[0] if result else None
+        finally:
+            session.close()
+
     def get_data(self, ticker, interval, start=None, end=None):
         """Retrieves data from the database as a pandas DataFrame."""
         try:
