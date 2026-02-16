@@ -12,7 +12,12 @@ class LevelsAnalyzer:
         self.threshold_pct = threshold_pct
 
     def find_pivots(self, df):
-        """Identifies local highs and lows."""
+        """
+        Identifies local highs and lows (Pivot Points).
+        
+        Input df: Pandas DataFrame with shape (Rows, 5) and columns ['Open', 'High', 'Low', 'Close', 'Volume'].
+        Returns: List of dictionaries [{'price': float, 'type': str, 'index': int}].
+        """
         pivots = []
         for i in range(self.window, len(df) - self.window):
             # Check for Support (Local Low)
@@ -36,11 +41,18 @@ class LevelsAnalyzer:
         return pivots
 
     def identify_levels(self, df):
-        """Groups pivots into clusters and ranks them by strength."""
+        """
+        Groups pivots into clusters and ranks them by strength (Interest Zones).
+        
+        Input df: Pandas DataFrame with shape (Rows, 5).
+        Returns: Sorted list of dicts [{'price': float, 'min_price': float, 'max_price': float, 'strength': int}].
+        """
         pivots = self.find_pivots(df)
         if not pivots:
             return []
 
+        # prices: NumPy array with shape (N, 1), where N is number of pivots.
+        # Layout: [[price1], [price2], ...]
         prices = np.array([p['price'] for p in pivots]).reshape(-1, 1)
         
         # Calculate dynamic distance threshold based on average price
@@ -55,10 +67,13 @@ class LevelsAnalyzer:
             linkage='complete'
         )
         
+        # clusters: NumPy 1D array with shape (N,).
+        # Layout: [cluster_id1, cluster_id2, ...]
         clusters = cluster_model.fit_predict(prices)
         
         levels = []
         for cluster_id in np.unique(clusters):
+            # cluster_prices: NumPy array with shape (M, 1), where M is points in this cluster.
             cluster_prices = prices[clusters == cluster_id]
             
             # Strength is the number of pivot points that hit this zone
@@ -66,11 +81,6 @@ class LevelsAnalyzer:
             
             # The level price is the average of the pivots in that cluster
             level_price = np.mean(cluster_prices)
-            
-            # Determine if it's primarily support or resistance
-            cluster_pivots = [pivots[i] for i, cid in enumerate(clusters) if cid == cluster_id]
-            support_count = sum(1 for p in cluster_pivots if p['type'] == 'support')
-            resistance_count = sum(1 for p in cluster_pivots if p['type'] == 'resistance')
             
             levels.append({
                 'price': round(float(level_price), 2),
