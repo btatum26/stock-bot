@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Databases
+data/*.db
+data/*.sqlite
+
+# Project Specific
+.python-version
+.uv/
+dist/
+build/
+*.egg-info/
