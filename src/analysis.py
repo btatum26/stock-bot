@@ -1,99 +1,141 @@
 import numpy as np
 import pandas as pd
+from scipy.signal import savgol_filter
 from sklearn.cluster import AgglomerativeClustering
 
 class LevelsAnalyzer:
-    def __init__(self, window=5, threshold_pct=0.01):
-        """
-        window: Number of bars to check on each side for local extrema.
-        threshold_pct: Max distance (as % of price) to group points into a single level.
-        """
-        self.window = window
+    def __init__(self, threshold_pct=0.015):
         self.threshold_pct = threshold_pct
 
-    def find_pivots(self, df):
+    def get_pivots_smoothed(self, df, window=5, polyorder=3):
         """
-        Identifies local highs and lows (Pivot Points).
+        Uses Savitzky-Golay filter to smooth the price action before finding pivots.
+        """
+        # Ensure window is odd and smaller than data
+        if window % 2 == 0: window += 1
+        if len(df) <= window: return []
+
+        # Smooth Highs and Lows
+        smoothed_high = savgol_filter(df['High'], window, polyorder)
+        smoothed_low = savgol_filter(df['Low'], window, polyorder)
         
-        Input df: Pandas DataFrame with shape (Rows, 5) and columns ['Open', 'High', 'Low', 'Close', 'Volume'].
-        Returns: List of dictionaries [{'price': float, 'type': str, 'index': int}].
+        pivots = []
+        # Find local extrema on smoothed data
+        half = window // 2
+        for i in range(half, len(df) - half):
+            # Support
+            if smoothed_low[i] == min(smoothed_low[i-half:i+half+1]):
+                pivots.append({'price': df['Low'].iloc[i], 'index': i, 'type': 'support'})
+            # Resistance
+            if smoothed_high[i] == max(smoothed_high[i-half:i+half+1]):
+                pivots.append({'price': df['High'].iloc[i], 'index': i, 'type': 'resistance'})
+        return pivots
+
+    def get_pivots_bill_williams(self, df, window=3):
+        """
+        Bill Williams Fractals: A high/low that is preceded and followed by 
+        N (window) lower highs/higher lows. Standard Bill Williams uses window=2 (5-bar pattern).
         """
         pivots = []
-        for i in range(self.window, len(df) - self.window):
-            # Check for Support (Local Low)
+        for i in range(window, len(df) - window):
+            # Bullish Fractal (Support)
             is_support = True
-            for j in range(i - self.window, i + self.window + 1):
-                if df['Low'].iloc[i] > df['Low'].iloc[j]:
+            for j in range(1, window + 1):
+                if df['Low'].iloc[i] >= df['Low'].iloc[i-j] or df['Low'].iloc[i] >= df['Low'].iloc[i+j]:
                     is_support = False
                     break
             if is_support:
-                pivots.append({'price': df['Low'].iloc[i], 'type': 'support', 'index': i})
-
-            # Check for Resistance (Local High)
+                pivots.append({'price': df['Low'].iloc[i], 'index': i, 'type': 'support'})
+            
+            # Bearish Fractal (Resistance)
             is_resistance = True
-            for j in range(i - self.window, i + self.window + 1):
-                if df['High'].iloc[i] < df['High'].iloc[j]:
+            for j in range(1, window + 1):
+                if df['High'].iloc[i] <= df['High'].iloc[i-j] or df['High'].iloc[i] <= df['High'].iloc[i+j]:
                     is_resistance = False
                     break
             if is_resistance:
-                pivots.append({'price': df['High'].iloc[i], 'type': 'resistance', 'index': i})
-        
+                pivots.append({'price': df['High'].iloc[i], 'index': i, 'type': 'resistance'})
         return pivots
 
-    def identify_levels(self, df):
+    def get_pivots_zigzag(self, df, deviation_pct=0.05):
         """
-        Groups pivots into clusters and ranks them by strength (Interest Zones).
+        ZigZag algorithm: identifies significant trend reversals based on 
+        a minimum percentage price move.
+        """
+        pivots = []
+        last_pivot_price = df['Close'].iloc[0]
+        last_pivot_type = None # 'H' for high, 'L' for low
         
-        Input df: Pandas DataFrame with shape (Rows, 5).
-        Returns: Sorted list of dicts [{'price': float, 'min_price': float, 'max_price': float, 'strength': int}].
+        for i in range(1, len(df)):
+            price_high = df['High'].iloc[i]
+            price_low = df['Low'].iloc[i]
+            
+            # Calculate % changes from last pivot
+            diff_high = (price_high - last_pivot_price) / last_pivot_price
+            diff_low = (price_low - last_pivot_price) / last_pivot_price
+            
+            if last_pivot_type is None:
+                if diff_high >= deviation_pct:
+                    last_pivot_type = 'H'
+                    last_pivot_price = price_high
+                    pivots.append({'price': price_high, 'index': i, 'type': 'resistance'})
+                elif diff_low <= -deviation_pct:
+                    last_pivot_type = 'L'
+                    last_pivot_price = price_low
+                    pivots.append({'price': price_low, 'index': i, 'type': 'support'})
+            
+            elif last_pivot_type == 'H':
+                if price_high > last_pivot_price:
+                    # Update the peak
+                    last_pivot_price = price_high
+                    pivots[-1] = {'price': price_high, 'index': i, 'type': 'resistance'}
+                elif diff_low <= -deviation_pct:
+                    # New trough
+                    last_pivot_type = 'L'
+                    last_pivot_price = price_low
+                    pivots.append({'price': price_low, 'index': i, 'type': 'support'})
+            
+            elif last_pivot_type == 'L':
+                if price_low < last_pivot_price:
+                    # Update the trough
+                    last_pivot_price = price_low
+                    pivots[-1] = {'price': price_low, 'index': i, 'type': 'support'}
+                elif diff_high >= deviation_pct:
+                    # New peak
+                    last_pivot_type = 'H'
+                    last_pivot_price = price_high
+                    pivots.append({'price': price_high, 'index': i, 'type': 'resistance'})
+                    
+        return pivots
+
+    def cluster_pivots(self, pivots):
         """
-        pivots = self.find_pivots(df)
+        Groups the found pivots into clusters to identify significant interest zones.
+        """
         if not pivots:
             return []
 
-        # prices: NumPy array with shape (N, 1), where N is number of pivots.
-        # Layout: [[price1], [price2], ...]
         prices = np.array([p['price'] for p in pivots]).reshape(-1, 1)
-        
-        # Calculate dynamic distance threshold based on average price
         avg_price = np.mean(prices)
         dist_threshold = avg_price * self.threshold_pct
 
-        # Use Agglomerative Clustering to group nearby prices
-        # linkage='complete' ensures no two points in a cluster are further than dist_threshold
-        cluster_model = AgglomerativeClustering(
+        model = AgglomerativeClustering(
             n_clusters=None, 
             distance_threshold=dist_threshold, 
             linkage='complete'
         )
         
-        # clusters: NumPy 1D array with shape (N,).
-        # Layout: [cluster_id1, cluster_id2, ...]
-        clusters = cluster_model.fit_predict(prices)
-        
+        clusters = model.fit_predict(prices)
         levels = []
         for cluster_id in np.unique(clusters):
-            # cluster_prices: NumPy array with shape (M, 1), where M is points in this cluster.
             cluster_prices = prices[clusters == cluster_id]
-            
-            # Strength is the number of pivot points that hit this zone
-            strength = len(cluster_prices)
-            
-            # The level price is the average of the pivots in that cluster
             level_price = np.mean(cluster_prices)
             
             levels.append({
                 'price': round(float(level_price), 2),
                 'min_price': round(float(np.min(cluster_prices)), 2),
                 'max_price': round(float(np.max(cluster_prices)), 2),
-                'strength': strength,
-                'hits': strength
+                'strength': len(cluster_prices)
             })
-        
-        # Sort levels by price for easy reading
-        return sorted(levels, key=lambda x: x['price'])
-
-    def get_strong_levels(self, df, min_strength=2):
-        """Returns only levels that have been tested at least N times."""
-        all_levels = self.identify_levels(df)
-        return [l for l in all_levels if l['strength'] >= min_strength]
+            
+        return sorted(levels, key=lambda x: x['strength'], reverse=True)

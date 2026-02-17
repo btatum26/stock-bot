@@ -14,9 +14,8 @@ data/*.db-wal
 data/*.db-journal
 data/*.sqlite
 
-# Project Specific
-.python-version
-.uv/
-dist/
-build/
-*.egg-info/
+# Temporary UI
+chart_viewer.py
+src/charting.py
+test_levels.py
+extract_tickers.py
