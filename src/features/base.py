@@ -27,6 +27,17 @@ class MarkerOutput(FeatureOutput):
     values: List[float] = None
     shape: str = 'o' # 'o', 't', 's', 'd', '+', 'x'
 
+@dataclass
+class HeatmapOutput(FeatureOutput):
+    """
+    Represents a vertical density gradient (e.g. for KDE).
+    price_grid: Array of price points (Y-axis)
+    density: Array of density values (0.0 to 1.0) for each price point.
+    """
+    price_grid: List[float] = None
+    density: List[float] = None
+    color_map: str = 'plasma' # matplotlib colormap name or similar
+
 # --- Base Feature Class ---
 class Feature(ABC):
     """
@@ -43,6 +54,12 @@ class Feature(ABC):
     @abstractmethod
     def description(self) -> str:
         """Short description of what the feature does."""
+        pass
+
+    @property
+    @abstractmethod
+    def category(self) -> str:
+        """Category of the feature (e.g., 'Price Levels', 'Trend', 'Volume')."""
         pass
 
     @property

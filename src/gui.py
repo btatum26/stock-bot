@@ -11,7 +11,7 @@ import pyqtgraph as pg
 from .database import Database
 from .engine import TradingEngine
 from .features.loader import load_features
-from .features.base import LineOutput, LevelOutput, MarkerOutput
+from .features.base import LineOutput, LevelOutput, MarkerOutput, HeatmapOutput
 
 # --- Custom Items (Candle, DateAxis) ---
 class DateAxis(pg.AxisItem):
@@ -203,9 +203,18 @@ class ChartWindow(QMainWindow):
         self.feature_layout = QVBoxLayout(dock_content)
         self.feature_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
-        # Feature Selector
+        # Feature Selector (Grouped by Category)
         self.feat_combo = QComboBox()
-        self.feat_combo.addItems(sorted(self.available_features.keys()))
+        
+        # Sort features: Category -> Name
+        sorted_feats = sorted(
+            self.available_features.values(), 
+            key=lambda f: (f.category, f.name)
+        )
+        
+        for f in sorted_feats:
+            self.feat_combo.addItem(f"{f.category}: {f.name}", userData=f.name)
+            
         self.btn_add_feat = QPushButton("Add Feature")
         self.btn_add_feat.clicked.connect(self.add_feature_ui)
         
@@ -267,7 +276,7 @@ class ChartWindow(QMainWindow):
                 self.time_label.setText("")
 
     def add_feature_ui(self):
-        feat_name = self.feat_combo.currentText()
+        feat_name = self.feat_combo.currentData() # Get internal ID (Feature Name)
         if feat_name in self.active_features:
             return # Already active
             
@@ -369,12 +378,42 @@ class ChartWindow(QMainWindow):
                 
                 self.plot_widget.addItem(region)
                 feat_data["items"].append(region)
+
+            elif isinstance(res, HeatmapOutput):
+                # 1. Create Image Data (1D vertical strip)
+                # density is list of 0.0-1.0
+                density = np.array(res.density)
+                # ImageItem expects (width, height)
+                # We want a vertical strip: width=1, height=N
+                img_data = density.reshape(1, -1)
                 
-                # Optional: Text Label
-                # text = pg.TextItem(res.name, color=res.color, anchor=(0, 1))
-                # text.setPos(len(self.df), res.price)
-                # self.plot_widget.addItem(text)
-                # feat_data["items"].append(text)
+                img_item = pg.ImageItem(img_data)
+                
+                # 2. Custom Colormap (Transparent -> Blue)
+                # 0.0 = (0, 0, 0, 0)
+                # 1.0 = (0, 100, 255, 100) # Semi-transparent blue
+                pos = np.array([0.0, 1.0])
+                color = np.array([[0, 0, 0, 0], [0, 100, 255, 100]], dtype=np.ubyte)
+                map = pg.ColorMap(pos, color)
+                lut = map.getLookupTable(0.0, 1.0, 256)
+                img_item.setLookupTable(lut)
+                
+                # 3. Position & Scale
+                # Rect should span (X_min to X_max, Y_min to Y_max of the density grid)
+                min_price = res.price_grid[0]
+                max_price = res.price_grid[-1]
+                height = max_price - min_price
+                
+                # Stretch across the chart. 
+                # We'll set a huge width so it covers scrolling.
+                width = len(self.df) + 1000
+                img_item.setRect(QRectF(-500, min_price, width, height))
+                
+                # Add to plot behind candles (z-value)
+                img_item.setZValue(-10)
+                
+                self.plot_widget.addItem(img_item)
+                feat_data["items"].append(img_item)
 
     def remove_feature(self, feat_name, widget):
         if feat_name in self.active_features:
