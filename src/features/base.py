@@ -76,7 +76,7 @@ class Feature(ABC):
         Dictionary of default parameters.
         Example: {'window': 14, 'threshold': 0.01}
         """
-        pass
+        return {}
 
     @property
     def y_range(self) -> Optional[List[float]]:

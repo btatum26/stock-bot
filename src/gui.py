@@ -2,7 +2,7 @@ import sys
 import pandas as pd
 import numpy as np
 import random
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox)
 from PyQt6.QtCore import Qt, QRectF
 import pyqtgraph as pg
 
@@ -58,6 +58,7 @@ class ChartWindow(QMainWindow):
         self.main_plot.getAxis('left').setPen('#444')
         self.main_plot.getAxis('bottom').setPen('#444')
         self.main_plot.vb.setZValue(10)
+        self.main_plot.vb.disableAutoRange(pg.ViewBox.YAxis)
         
         # Volume Overlay
         self.vol_view = pg.ViewBox()
@@ -67,6 +68,7 @@ class ChartWindow(QMainWindow):
         self.vol_view.setMouseEnabled(x=False, y=False)
         self.vol_view.setAcceptHoverEvents(False)
         self.vol_view.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.vol_view.disableAutoRange(pg.ViewBox.YAxis)
         
         self.main_plot.vb.sigResized.connect(self.update_volume_geometry)
         self.main_plot.vb.sigXRangeChanged.connect(self.update_view)
@@ -83,13 +85,16 @@ class ChartWindow(QMainWindow):
         self.timestamps = []
         self.candle_item = None
         self.simple_candle_item = None
+        self._last_lod = None # Hysteresis for LOD
         self.sub_plots = {} # {feat_name: PlotItem}
 
     def update_volume_geometry(self):
         if not hasattr(self, 'vol_view') or not hasattr(self, 'main_plot'): return
         rect = self.main_plot.vb.sceneBoundingRect()
         if rect.isValid() and rect.width() > 0:
-            self.vol_view.setGeometry(rect)
+            # Only update if geometry changed significantly to reduce flickering
+            if self.vol_view.geometry() != rect:
+                self.vol_view.setGeometry(rect)
 
     def _setup_crosshair(self):
         self.v_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#888', width=1, style=Qt.PenStyle.DashLine))
@@ -185,10 +190,13 @@ class ChartWindow(QMainWindow):
                                       pen=pg.mkPen(res.color, width=res.width))
                 data["items"].append(item)
             elif isinstance(res, LevelOutput):
-                region = pg.LinearRegionItem(values=[res.min_price, res.max_price], orientation=pg.LinearRegionItem.Horizontal, 
-                                             movable=False, brush=pg.mkBrush(res.color + "40"), pen=None)
-                for line in region.lines: line.setPen(None); line.setHoverPen(None)
-                plot_item.addItem(region); data["items"].append(region)
+                if res.min_price == res.max_price:
+                    item = pg.InfiniteLine(pos=res.min_price, angle=0, pen=pg.mkPen(res.color, width=1, style=Qt.PenStyle.DashLine))
+                else:
+                    item = pg.LinearRegionItem(values=[res.min_price, res.max_price], orientation=pg.LinearRegionItem.Horizontal, 
+                                                 movable=False, brush=pg.mkBrush(res.color + "40"), pen=None)
+                    for line in item.lines: line.setPen(None); line.setHoverPen(None)
+                plot_item.addItem(item); data["items"].append(item)
             elif isinstance(res, MarkerOutput):
                 sym = {'o':'o','d':'d','t':'t1','s':'s','x':'x','+':'+'}.get(res.shape, 'o')
                 item = pg.ScatterPlotItem(x=res.indices, y=res.values, brush=pg.mkBrush(res.color), symbol=sym, size=10)
@@ -254,10 +262,22 @@ class ChartWindow(QMainWindow):
     def update_view(self):
         if self.df is None or self.df.empty: return
         self.update_volume_geometry()
-        x_min, x_max = self.main_plot.vb.viewRange()[0]
+        x_range = self.main_plot.vb.viewRange()[0]
+        x_min, x_max = x_range
+        width = x_max - x_min
         
-        self.candle_item.setVisible(x_max - x_min <= 500)
-        self.simple_candle_item.setVisible(x_max - x_min > 500)
+        # LOD Switch with hysteresis
+        # threshold is 500, use 450/550 for switching
+        if self._last_lod is None or self._last_lod == "simple":
+            if width < 450:
+                self.candle_item.setVisible(True)
+                self.simple_candle_item.setVisible(False)
+                self._last_lod = "full"
+        else: # currently full
+            if width > 550:
+                self.candle_item.setVisible(False)
+                self.simple_candle_item.setVisible(True)
+                self._last_lod = "simple"
         
         idx_min, idx_max = max(0, int(x_min)), min(len(self.df), int(x_max) + 1)
         if idx_min >= idx_max: return
@@ -266,7 +286,10 @@ class ChartWindow(QMainWindow):
         y_min, y_max = np.nanmin(sub['Low'].values), np.nanmax(sub['High'].values)
         if not np.isnan(y_min):
             pad = (y_max - y_min) * 0.1 or 1.0
-            self.main_plot.vb.setYRange(y_min - pad, y_max + pad, padding=0)
+            # Only update if the range has changed significantly? No, let's keep it direct but check for redundancy
+            curr_y = self.main_plot.vb.viewRange()[1]
+            if abs(curr_y[0] - (y_min - pad)) > (pad * 0.01) or abs(curr_y[1] - (y_max + pad)) > (pad * 0.01):
+                self.main_plot.vb.setYRange(y_min - pad, y_max + pad, padding=0)
         
         v_max = np.nanmax(sub['Volume'].values)
         self.vol_view.setYRange(0, v_max * 4 if v_max > 0 else 1, padding=0)

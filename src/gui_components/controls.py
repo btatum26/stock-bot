@@ -14,7 +14,7 @@ class ControlBar(QWidget):
         self.ticker_history.addItem("History...")
 
         self.interval_combo = QComboBox()
-        self.interval_combo.addItems(["1d", "4h", "1h", "15m", "1w"])
+        self.interval_combo.addItems([ "1w", "1d", "4h", "1h", "15m"])
         
         self.btn_load = QPushButton("Load Data")
         self.btn_random = QPushButton("Random")
