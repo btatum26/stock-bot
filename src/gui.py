@@ -31,6 +31,15 @@ class ChartWindow(QMainWindow):
         self.available_features = load_features()
         self.active_features = {} # {name: {params, items, plot_item_ref}}
 
+        # State
+        self.df = None
+        self.timestamps = []
+        self.candle_item = None
+        self.simple_candle_item = None
+        self._last_lod = None # Hysteresis for LOD
+        self.sub_plots = {} # {feat_name: PlotItem}
+        self.v_lines = []
+
         self._init_ui()
 
     def _init_ui(self):
@@ -80,14 +89,6 @@ class ChartWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.feature_dock)
         self.feature_dock.btn_add_feat.clicked.connect(self.add_feature_ui)
 
-        # State
-        self.df = None
-        self.timestamps = []
-        self.candle_item = None
-        self.simple_candle_item = None
-        self._last_lod = None # Hysteresis for LOD
-        self.sub_plots = {} # {feat_name: PlotItem}
-
     def update_volume_geometry(self):
         if not hasattr(self, 'vol_view') or not hasattr(self, 'main_plot'): return
         rect = self.main_plot.vb.sceneBoundingRect()
@@ -97,10 +98,24 @@ class ChartWindow(QMainWindow):
                 self.vol_view.setGeometry(rect)
 
     def _setup_crosshair(self):
-        self.v_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#888', width=1, style=Qt.PenStyle.DashLine))
+        for v in self.v_lines:
+            if v.scene(): v.scene().removeItem(v)
+        self.v_lines = []
+        
+        v_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#888', width=1, style=Qt.PenStyle.DashLine))
         self.h_line = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#888', width=1, style=Qt.PenStyle.DashLine))
-        self.main_plot.addItem(self.v_line, ignoreBounds=True)
+        self.main_plot.addItem(v_line, ignoreBounds=True)
         self.main_plot.addItem(self.h_line, ignoreBounds=True)
+        self.v_lines.append(v_line)
+
+        # Restore lines for existing sub-plots
+        for feat_name, data in self.active_features.items():
+            if data.get("v_line") and data.get("plot") != self.main_plot:
+                # Re-create the line since it was removed from scene
+                v_sub = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#888', width=1, style=Qt.PenStyle.DashLine))
+                data["plot"].addItem(v_sub, ignoreBounds=True)
+                data["v_line"] = v_sub
+                self.v_lines.append(v_sub)
         
         self.price_label = pg.TextItem(anchor=(0, 1), color='#ddd', fill=pg.mkBrush(0, 0, 0, 200))
         self.time_label = pg.TextItem(anchor=(1, 0), color='#ddd', fill=pg.mkBrush(0, 0, 0, 200))
@@ -119,7 +134,7 @@ class ChartWindow(QMainWindow):
             x, y = mouse_point.x(), mouse_point.y()
             
             idx = int(round(x))
-            self.v_line.setPos(idx)
+            for v_line in self.v_lines: v_line.setPos(idx)
             self.h_line.setPos(y)
             
             view_range = self.main_plot.vb.viewRange()
@@ -152,6 +167,7 @@ class ChartWindow(QMainWindow):
         )
 
         plot_target = self.main_plot
+        v_line = None
         if feature.target_pane == "new":
             self.layout_widget.nextRow()
             new_plot = self.layout_widget.addPlot()
@@ -163,9 +179,14 @@ class ChartWindow(QMainWindow):
             else: new_plot.vb.setAutoVisible(y=True)
             plot_target = new_plot
             self.sub_plots[feat_name] = new_plot
+            
+            # Sub-plot cursor
+            v_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#888', width=1, style=Qt.PenStyle.DashLine))
+            new_plot.addItem(v_line, ignoreBounds=True)
+            self.v_lines.append(v_line)
 
         self.active_features[feat_name] = {
-            "instance": feature, "inputs": input_widgets, "items": [], "plot": plot_target
+            "instance": feature, "inputs": input_widgets, "items": [], "plot": plot_target, "v_line": v_line
         }
         self.update_feature(feat_name)
 
@@ -212,6 +233,8 @@ class ChartWindow(QMainWindow):
         if feat_name in self.active_features:
             data = self.active_features[feat_name]
             for item in data["items"]: data["plot"].removeItem(item)
+            if data.get("v_line") in self.v_lines:
+                self.v_lines.remove(data["v_line"])
             if data["instance"].target_pane == "new":
                 self.layout_widget.removeItem(data["plot"])
                 del self.sub_plots[feat_name]
