@@ -21,11 +21,12 @@ class RSI(Feature):
         return "new"
 
     @property
-    def parameters(self) -> Dict[str, Any]:
-        return {
-            "period": 14,
-            "color": "#aaff00"
-        }
+    def y_range(self) -> List[float]:
+        return [0, 100]
+
+    @property
+    def y_padding(self) -> float:
+        return 0.05
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
         period = int(params.get("period", 14))

@@ -1,6 +1,7 @@
 import sys
 import pandas as pd
 import numpy as np
+import random
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QComboBox, QLabel, QPushButton, QLineEdit, 
                              QDockWidget, QFormLayout, QGroupBox, QCheckBox)
@@ -147,10 +148,6 @@ class ChartWindow(QMainWindow):
         self.btn_random.clicked.connect(self.load_random)
         self.btn_random.setStyleSheet("background-color: #444; margin-left: 5px;")
         
-        self.btn_reload = QPushButton("Reload App")
-        self.btn_reload.clicked.connect(self.reload_app)
-        self.btn_reload.setStyleSheet("background-color: #552222; margin-left: 15px;")
-        
         c_layout.addWidget(QLabel("Ticker:"))
         c_layout.addWidget(self.ticker_input)
         c_layout.addWidget(self.ticker_history)
@@ -160,7 +157,6 @@ class ChartWindow(QMainWindow):
         c_layout.addWidget(self.interval_combo)
         c_layout.addSpacing(15)
         c_layout.addWidget(self.btn_load)
-        c_layout.addWidget(self.btn_reload)
         c_layout.addStretch()
         layout.addWidget(controls)
         
@@ -171,14 +167,28 @@ class ChartWindow(QMainWindow):
         
         # Initialize Main Plot (Row 0)
         self.main_plot = self.layout_widget.addPlot(row=0, col=0)
-        self.main_plot.showGrid(x=True, y=True, alpha=0.15)
+        self.main_plot.showGrid(x=False, y=True, alpha=0.15)
         self.main_plot.setMouseEnabled(x=True, y=False)
         self.main_plot.getAxis('left').setPen('#444')
         self.main_plot.getAxis('bottom').setPen('#444')
         
-        # Volume Overlay (Linked to Main Plot)
-        # We will manually scale bar heights to fit bottom 20% of main plot
-        # No separate ViewBox needed if we scale data directly or use a separate Item.
+        # Volume ViewBox (Overlay)
+        self.vol_view = pg.ViewBox()
+        self.main_plot.scene().addItem(self.vol_view)
+        self.vol_view.setXLink(self.main_plot.vb)
+        self.vol_view.setZValue(-10) # Well behind price data
+        self.vol_view.setMouseEnabled(x=False, y=False) # Disable ViewBox's own scaling
+        
+        # Ensure price chart ViewBox is on top and accepts mouse events
+        self.main_plot.vb.setZValue(10)
+        
+        # Make volume view transparent to mouse events entirely
+        self.vol_view.setAcceptHoverEvents(False)
+        self.vol_view.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        
+        # Sync geometry and range
+        self.main_plot.vb.sigResized.connect(self.update_volume_geometry)
+        self.main_plot.vb.sigXRangeChanged.connect(self.update_view)
         
         self._setup_crosshair()
         
@@ -215,6 +225,13 @@ class ChartWindow(QMainWindow):
         self.simple_candle_item = None
         self.sub_plots = {} # {feat_name: PlotItem}
 
+    def update_volume_geometry(self):
+        # Match the volume view to the main plot's ViewBox rect
+        if not hasattr(self, 'vol_view') or not hasattr(self, 'main_plot'): return
+        rect = self.main_plot.vb.sceneBoundingRect()
+        if rect.isValid() and rect.width() > 0:
+            self.vol_view.setGeometry(rect)
+
     def _setup_crosshair(self):
         self.v_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#888', width=1, style=Qt.PenStyle.DashLine))
         self.h_line = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#888', width=1, style=Qt.PenStyle.DashLine))
@@ -223,8 +240,11 @@ class ChartWindow(QMainWindow):
         
         self.price_label = pg.TextItem(anchor=(0, 1), color='#ddd', fill=pg.mkBrush(0, 0, 0, 200))
         self.time_label = pg.TextItem(anchor=(1, 0), color='#ddd', fill=pg.mkBrush(0, 0, 0, 200))
+        self.vol_label = pg.TextItem(anchor=(0, 0), color='#aaa', fill=pg.mkBrush(0, 0, 0, 150)) # New Vol Label
+        
         self.main_plot.addItem(self.price_label, ignoreBounds=True)
         self.main_plot.addItem(self.time_label, ignoreBounds=True)
+        self.main_plot.addItem(self.vol_label, ignoreBounds=True)
         
         self.proxy = pg.SignalProxy(self.main_plot.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
 
@@ -240,22 +260,33 @@ class ChartWindow(QMainWindow):
             
             view_range = self.main_plot.vb.viewRange()
             x_max = view_range[0][1]
+            x_min = view_range[0][0]
+            y_max = view_range[1][1]
             
             self.price_label.setPos(x_max, y)
             self.price_label.setText(f"{y:.2f}")
             self.price_label.setAnchor((1, 0.5))
             
-            if 0 <= idx < len(self.timestamps):
+            if self.df is not None and 0 <= idx < len(self.df):
                 ts = pd.Timestamp(self.timestamps[idx])
                 date_str = ts.strftime('%Y-%m-%d %H:%M')
-                # If we have subplots, maybe show time on bottom-most plot?
-                # For now keep on main plot bottom
                 y_min = view_range[1][0]
                 self.time_label.setPos(idx, y_min)
                 self.time_label.setText(date_str)
                 self.time_label.setAnchor((0.5, 1))
+                
+                # Update Volume Label (Top Left corner of chart)
+                vol = self.df['Volume'].iloc[idx]
+                # Format: 1.5M, 200K, etc.
+                if vol > 1_000_000: vol_str = f"{vol/1_000_000:.2f}M"
+                elif vol > 1_000: vol_str = f"{vol/1_000:.1f}K"
+                else: vol_str = str(int(vol))
+                
+                self.vol_label.setPos(x_min, y_max)
+                self.vol_label.setText(f"Vol: {vol_str}")
             else:
                 self.time_label.setText("")
+                self.vol_label.setText("")
 
     def add_feature_ui(self):
         feat_name = self.feat_combo.currentData()
@@ -298,9 +329,15 @@ class ChartWindow(QMainWindow):
             new_plot = self.layout_widget.addPlot()
             new_plot.setMaximumHeight(150)
             new_plot.setXLink(self.main_plot)
-            new_plot.showGrid(x=True, y=True, alpha=0.15)
-            # Hide X-axis tick values on subplots to avoid clutter? 
-            # Or keep them. Let's keep them for now.
+            new_plot.showGrid(x=False, y=True, alpha=0.15)
+            new_plot.setMouseEnabled(x=True, y=False) # Disable Y-panning
+            
+            # Initial range if fixed
+            if feature.y_range:
+                new_plot.setYRange(feature.y_range[0], feature.y_range[1], padding=0)
+            else:
+                new_plot.vb.setAutoVisible(y=True) # Only auto-scale if not fixed
+            
             plot_target = new_plot
             self.sub_plots[feat_name] = new_plot
 
@@ -410,8 +447,15 @@ class ChartWindow(QMainWindow):
 
     def load_random(self):
         tickers = self.db.get_all_tickers()
-        if not tickers: tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META"]
-        self.ticker_input.setText(random.choice(tickers))
+        print(f"DEBUG: Found {len(tickers)} tickers in DB.")
+        
+        if not tickers:
+            tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META"]
+            print("DEBUG: Using fallback ticker list.")
+        
+        random_ticker = random.choice(tickers)
+        print(f"DEBUG: Loading random ticker {random_ticker}")
+        self.ticker_input.setText(random_ticker)
         self.load_chart()
 
     def add_to_history(self, ticker):
@@ -473,45 +517,48 @@ class ChartWindow(QMainWindow):
         self.main_plot.addItem(self.simple_candle_item)
         self.simple_candle_item.setVisible(False)
         
-        # Volume Overlay
-        # Draw volume bars at bottom of main chart
+        # Volume Data
+        self.vol_view.clear()
         vol = self.df['Volume'].values
-        # Scale volume to fit in bottom 20% of price range?
-        # Better: use a separate viewbox or just normalized bars?
-        # Simple: Normalized bars scaled to (min_y, min_y + range*0.2)
-        # We'll update this dynamic scaling in update_view()
-        self.volume_item = pg.BarGraphItem(x=np.arange(len(data)), height=vol, width=0.8, brush=pg.mkBrush(255, 255, 255, 30))
-        self.main_plot.addItem(self.volume_item)
-        # We need to scale it manually in update_view
+        opens = self.df['Open'].values
+        closes = self.df['Close'].values
+        
+        # Colors: Green if Close >= Open, else Red. 50 alpha.
+        brushes = [pg.mkBrush('#00ff0050') if c >= o else pg.mkBrush('#ff000050') for o, c in zip(opens, closes)]
+        
+        # Create BarGraphItem
+        vol_item = pg.BarGraphItem(x=np.arange(len(vol)), height=vol, width=0.8, brushes=brushes, pen=None)
+        self.vol_view.addItem(vol_item)
         
         # Update All Active Features
         for name in self.active_features:
             self.update_feature(name)
         
-        # Zoom & AutoScale
-        try: self.main_plot.vb.sigXRangeChanged.disconnect()
-        except: pass
-        self.main_plot.vb.sigXRangeChanged.connect(self.update_view)
-        
+        # Initial View Setup (Last 100 bars)
         self.main_plot.setXRange(max(0, len(data)-100), len(data))
         self.update_view()
 
     def update_view(self):
-        if self.df is None: return
+        """Combined Y-Auto-Scale and LOD Logic"""
+        if self.df is None or self.df.empty: return
+        
+        # Ensure volume geometry is synced
+        self.update_volume_geometry()
+        
         vb = self.main_plot.vb
         x_min, x_max = vb.viewRange()[0]
         
         # LOD
         if (x_max - x_min) > 500:
-            if self.candle_item.isVisible():
+            if self.candle_item and self.candle_item.isVisible():
                 self.candle_item.setVisible(False)
                 self.simple_candle_item.setVisible(True)
         else:
-            if not self.candle_item.isVisible():
+            if self.candle_item and not self.candle_item.isVisible():
                 self.candle_item.setVisible(True)
                 self.simple_candle_item.setVisible(False)
         
-        # Auto Scale Y
+        # Auto Scale Price Y
         idx_min = max(0, int(x_min))
         idx_max = min(len(self.df), int(x_max) + 1)
         if idx_min >= idx_max: return
@@ -519,62 +566,52 @@ class ChartWindow(QMainWindow):
         sub = self.df.iloc[idx_min:idx_max]
         if sub.empty: return
         
-        y_min = sub['Low'].min()
-        y_max = sub['High'].max()
-        if pd.isna(y_min): return
+        # Use numpy for safer min/max with potential NaNs
+        y_min = np.nanmin(sub['Low'].values)
+        y_max = np.nanmax(sub['High'].values)
+        if np.isnan(y_min) or np.isnan(y_max): return
         
-        # Scale Volume
-        # We map volume 0..MaxVol to y_min..(y_min + range*0.2)
-        # But BarGraphItem draws from 0. We need to transform it.
-        # Actually, simpler to just set the scale of the item?
-        # No, bar graph heights are fixed.
-        # We can re-set the data of the volume item?
-        # Or better: use a separate ViewBox for volume overlaid on the plot.
-        # For simplicity in this step, I'll just skip complex volume scaling scaling 
-        # and assume the user focuses on the sub-pane architecture.
-        # Wait, I added volume_item. Let's try to scale it.
-        
-        vol_sub = sub['Volume']
-        max_vol = vol_sub.max()
-        if max_vol > 0:
-            # We want bar height to be (vol / max_vol) * (y_max - y_min) * 0.2
-            # AND we want base at y_min.
-            # BarGraphItem draws from y=0.
-            # So we set y0 = y_min.
-            # And height = scaled height.
-            # Only way is to update the item data.
-            price_range = y_max - y_min
-            target_height = price_range * 0.2
-            scale_factor = target_height / max_vol
-            
-            # This is expensive to do every frame.
-            # Alternative: Use a separate ViewBox linked to X but independent Y.
-            # I will omit dynamic volume scaling for this iteration to ensure stability
-            # of the sub-pane features which was the main request.
-            pass
-
         pad = (y_max - y_min) * 0.1
-        if pad == 0: pad = 1
+        if pad <= 0: pad = 1.0 # Handle flat lines or single points
         vb.setYRange(y_min - pad, y_max + pad, padding=0)
-
-    def reload_app(self):
-        # Full restart is hard in-process, but we can reset the state
-        print("Reloading App State...")
-        self.main_plot.clear()
-        self.layout_widget.clear() # Clears all rows
-        self.sub_plots = {}
-        self.active_features = {}
-        self.feature_dock.close()
-        self.removeDockWidget(self.feature_dock)
         
-        # Re-init UI parts
-        self.main_plot = self.layout_widget.addPlot(row=0, col=0)
-        self._init_ui_logic() # Split UI init if possible, but simpler to just clear data
-        # Actually, simpler "Reload" usually means re-import code. 
-        # For a running GUI, "Reload Data" is what we have. 
-        # "Restart App" requires os.execl.
-        import os
-        os.execl(sys.executable, sys.executable, *sys.argv)
+        # Auto Scale Volume Y (Overlay)
+        # 4x multiplier ensures it stays in the bottom 25%
+        v_max = np.nanmax(sub['Volume'].values)
+        if v_max > 0:
+            self.vol_view.setYRange(0, v_max * 4, padding=0)
+        else:
+            self.vol_view.setYRange(0, 1, padding=0)
+
+        # Auto Scale Sub Plots (New)
+        for name, data in self.active_features.items():
+            feat = data["instance"]
+            plot = data["plot"]
+            
+            # Skip main plot features
+            if feat.target_pane == "main": continue
+            
+            # If fixed range, skip (already handled by setYRange once)
+            if feat.y_range is not None: continue
+            
+            # Dynamic scaling for sub-plots
+            all_y = []
+            for item in data["items"]:
+                if hasattr(item, 'getData'):
+                    _, y = item.getData()
+                    if y is not None and len(y) > 0:
+                        all_y.extend(y[idx_min:idx_max])
+            
+            if all_y:
+                y_arr = np.array(all_y, dtype=float)
+                y_min_f = np.nanmin(y_arr)
+                y_max_f = np.nanmax(y_arr)
+                
+                if not np.isnan(y_min_f) and not np.isnan(y_max_f):
+                    h = y_max_f - y_min_f
+                    pad = h * feat.y_padding if h > 0 else 1.0
+                    plot.setYRange(y_min_f - pad, y_max_f + pad, padding=0)
+
 
 def main():
     app = QApplication(sys.argv)

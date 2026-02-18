@@ -71,13 +71,27 @@ class Feature(ABC):
         pass
 
     @property
-    @abstractmethod
     def parameters(self) -> Dict[str, Any]:
         """
         Dictionary of default parameters.
         Example: {'window': 14, 'threshold': 0.01}
         """
         pass
+
+    @property
+    def y_range(self) -> Optional[List[float]]:
+        """
+        Fixed Y-axis range [min, max].
+        None if dynamic/data-driven.
+        """
+        return None
+
+    @property
+    def y_padding(self) -> float:
+        """
+        Default Y-axis padding (0.1 = 10% of data height).
+        """
+        return 0.1
 
     @abstractmethod
     def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
