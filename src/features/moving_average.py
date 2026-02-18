@@ -5,31 +5,39 @@ from .base import Feature, FeatureOutput, LineOutput
 class MovingAverage(Feature):
     @property
     def name(self) -> str:
-        return "Simple Moving Average"
+        return "Moving Average"
 
     @property
     def description(self) -> str:
-        return "Standard Trend Indicator."
+        return "Trend indicator (SMA, EMA)."
+
+    @property
+    def category(self) -> str:
+        return "Trend Indicators"
 
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
             "period": 50,
+            "type": ["SMA", "EMA"],
             "color": "#ff9900"
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
         period = int(params.get("period", 50))
+        ma_type = params.get("type", "SMA")
         color = params.get("color", "#ff9900")
         
-        sma = df['Close'].rolling(window=period).mean()
+        if ma_type == "EMA":
+            ma = df['Close'].ewm(span=period, adjust=False).mean()
+        else:
+            ma = df['Close'].rolling(window=period).mean()
         
-        # Replace NaNs with None for JSON serialization or safe plotting
-        data_list = sma.where(pd.notnull(sma), None).tolist()
+        data_list = ma.where(pd.notnull(ma), None).tolist()
         
         return [
             LineOutput(
-                name=f"SMA {period}",
+                name=f"{ma_type} {period}",
                 data=data_list,
                 color=color,
                 width=2
