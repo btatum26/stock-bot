@@ -3,18 +3,18 @@ import pandas as pd
 import numpy as np
 from .base import Feature, FeatureOutput, LineOutput
 
-class OnBalanceVolume(Feature):
+class CCI(Feature):
     @property
     def name(self) -> str:
-        return "On-Balance Volume"
+        return "CCI"
 
     @property
     def description(self) -> str:
-        return "Cumulative volume flow."
+        return "Commodity Channel Index."
 
     @property
     def category(self) -> str:
-        return "Volume & Profile"
+        return "Oscillators (Momentum)"
 
     @property
     def target_pane(self) -> str:
@@ -23,24 +23,26 @@ class OnBalanceVolume(Feature):
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
-            "color": "#ffff00"
+            "period": 20,
+            "color": "#ff00aa"
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
-        change = df['Close'].diff()
-        direction = np.where(change > 0, 1, -1)
-        direction[0] = 0
-        direction = np.where(change == 0, 0, direction)
+        period = int(params.get("period", 20))
         
-        obv = (direction * df['Volume']).cumsum()
+        tp = (df['High'] + df['Low'] + df['Close']) / 3
+        sma = tp.rolling(window=period).mean()
+        mad = tp.rolling(window=period).apply(lambda x: np.mean(np.abs(x - x.mean())))
         
-        data_list = obv.where(pd.notnull(obv), None).tolist()
+        cci = (tp - sma) / (0.015 * mad)
+        
+        data_list = cci.where(pd.notnull(cci), None).tolist()
         
         return [
             LineOutput(
-                name="OBV",
+                name=f"CCI {period}",
                 data=data_list,
-                color=params.get("color", "#ffff00"),
+                color=params.get("color", "#ff00aa"),
                 width=2
             )
         ]

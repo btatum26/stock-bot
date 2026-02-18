@@ -45,6 +45,14 @@ class Feature(ABC):
     """
     
     @property
+    def target_pane(self) -> str:
+        """
+        'main': Overlay on price chart.
+        'new': Create a new subplot below.
+        """
+        return "main"
+
+    @property
     @abstractmethod
     def name(self) -> str:
         """Display name of the feature."""

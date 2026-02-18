@@ -3,18 +3,18 @@ import pandas as pd
 import numpy as np
 from .base import Feature, FeatureOutput, LineOutput
 
-class OnBalanceVolume(Feature):
+class RSI(Feature):
     @property
     def name(self) -> str:
-        return "On-Balance Volume"
+        return "RSI"
 
     @property
     def description(self) -> str:
-        return "Cumulative volume flow."
+        return "Relative Strength Index (0-100)."
 
     @property
     def category(self) -> str:
-        return "Volume & Profile"
+        return "Oscillators (Momentum)"
 
     @property
     def target_pane(self) -> str:
@@ -23,24 +23,25 @@ class OnBalanceVolume(Feature):
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
-            "color": "#ffff00"
+            "period": 14,
+            "color": "#aaff00"
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
-        change = df['Close'].diff()
-        direction = np.where(change > 0, 1, -1)
-        direction[0] = 0
-        direction = np.where(change == 0, 0, direction)
+        period = int(params.get("period", 14))
         
-        obv = (direction * df['Volume']).cumsum()
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
         
-        data_list = obv.where(pd.notnull(obv), None).tolist()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
         
         return [
             LineOutput(
-                name="OBV",
-                data=data_list,
-                color=params.get("color", "#ffff00"),
+                name=f"RSI {period}",
+                data=rsi.where(pd.notnull(rsi), None).tolist(),
+                color=params.get("color", "#aaff00"),
                 width=2
             )
         ]
