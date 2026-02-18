@@ -16,11 +16,10 @@ class SupportResistance(Feature):
     def parameters(self) -> Dict[str, Any]:
         return {
             "method": ["ZigZag", "Savitzky-Golay", "Bill Williams"], 
-            "threshold_pct": 0.015, # Filter small pivots
-            "window": 5, 
-            "clustering_pct": 0.02, # Merge distance
-            "min_strength": 1.0,
-            "recency": 1.0 # 0=None, 1=Linear, 5=Strong
+            "threshold_pct": 0.015, # For identifying the pivot itself (ZigZag)
+            "window": 5, # Only for SG or BW
+            "clustering_pct": 0.02, # For merging nearby pivots
+            "min_strength": 1.0
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
@@ -29,19 +28,19 @@ class SupportResistance(Feature):
         window = int(params.get("window", 5))
         cluster_thresh = float(params.get("clustering_pct", 0.02))
         min_str = float(params.get("min_strength", 1.0))
-        recency = float(params.get("recency", 1.0))
 
+        # Pass the clustering threshold to the analyzer
         analyzer = LevelsAnalyzer(threshold_pct=cluster_thresh)
         
         pivots = []
         if method == "Savitzky-Golay":
-            pivots = analyzer.get_pivots_smoothed(df, window=window, min_dist_pct=threshold)
+            pivots = analyzer.get_pivots_smoothed(df, window=window)
         elif method == "Bill Williams":
-            pivots = analyzer.get_pivots_bill_williams(df, window=window, min_dist_pct=threshold)
+            pivots = analyzer.get_pivots_bill_williams(df, window=window)
         else: # ZigZag
             pivots = analyzer.get_pivots_zigzag(df, deviation_pct=threshold) 
 
-        clusters = analyzer.cluster_pivots(pivots, total_bars=len(df), recency_factor=recency)
+        clusters = analyzer.cluster_pivots(pivots)
         
         outputs = []
         for c in clusters:
