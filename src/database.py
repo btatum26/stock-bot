@@ -75,6 +75,15 @@ class Database:
         finally:
             session.close()
 
+    def get_all_tickers(self):
+        """Returns a list of all distinct tickers in the database."""
+        session = self.Session()
+        try:
+            results = session.query(OHLCV.ticker).distinct().all()
+            return [r[0] for r in results]
+        finally:
+            session.close()
+
     def get_data(self, ticker, interval, start=None, end=None):
         """Retrieves data from the database as a pandas DataFrame."""
         try:

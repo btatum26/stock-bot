@@ -1,6 +1,7 @@
 import sys
 import pandas as pd
 import numpy as np
+import random
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QComboBox, QLabel, QPushButton, QLineEdit, 
                              QDockWidget, QFormLayout, QGroupBox, QCheckBox)
@@ -153,13 +154,28 @@ class ChartWindow(QMainWindow):
         
         self.ticker_input = QLineEdit("AAPL")
         self.ticker_input.setFixedWidth(80)
+        self.ticker_input.returnPressed.connect(self.load_chart) # Enter key to load
+        
+        # Ticker History
+        self.ticker_history = QComboBox()
+        self.ticker_history.setFixedWidth(100)
+        self.ticker_history.addItem("History...")
+        self.ticker_history.currentIndexChanged.connect(self.load_from_history)
+        
         self.interval_combo = QComboBox()
         self.interval_combo.addItems(["1d", "4h", "1h", "15m", "1w"])
+        
         self.btn_load = QPushButton("Load Data")
         self.btn_load.clicked.connect(self.load_chart)
         
+        self.btn_random = QPushButton("Random")
+        self.btn_random.clicked.connect(self.load_random)
+        self.btn_random.setStyleSheet("background-color: #444; margin-left: 5px;")
+        
         c_layout.addWidget(QLabel("Ticker:"))
         c_layout.addWidget(self.ticker_input)
+        c_layout.addWidget(self.ticker_history)
+        c_layout.addWidget(self.btn_random)
         c_layout.addSpacing(15)
         c_layout.addWidget(QLabel("Interval:"))
         c_layout.addWidget(self.interval_combo)
@@ -370,6 +386,25 @@ class ChartWindow(QMainWindow):
         # Remove UI
         widget.deleteLater()
 
+    def load_from_history(self, index):
+        if index <= 0: return 
+        ticker = self.ticker_history.currentText()
+        self.ticker_input.setText(ticker)
+        self.load_chart()
+
+    def load_random(self):
+        tickers = self.db.get_all_tickers()
+        if not tickers:
+            tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META"]
+        
+        random_ticker = random.choice(tickers)
+        self.ticker_input.setText(random_ticker)
+        self.load_chart()
+
+    def add_to_history(self, ticker):
+        if self.ticker_history.findText(ticker) == -1:
+            self.ticker_history.addItem(ticker)
+
     def load_chart(self):
         ticker = self.ticker_input.text().upper()
         interval = self.interval_combo.currentText()
@@ -387,6 +422,7 @@ class ChartWindow(QMainWindow):
 
         if self.df.empty: return
 
+        self.add_to_history(ticker)
         self.plot_widget.clear()
         
         # Re-add persistent items
