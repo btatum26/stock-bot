@@ -8,11 +8,16 @@ venv/
 ENV/
 
 # Databases
+data/
 data/*.db
 data/*.db-shm
 data/*.db-wal
 data/*.db-journal
 data/*.sqlite
+
+# Feature Sets
+feature_sets/
+*.json
 
 # Temporary UI
 # run_gui.py

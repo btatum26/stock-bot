@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 import pandas as pd
 import numpy as np
-from .base import Feature, FeatureOutput, LineOutput, LevelOutput
+from .base import Feature, FeatureOutput, LineOutput, LevelOutput, FeatureResult
 
 class RSI(Feature):
     @property
@@ -37,7 +37,7 @@ class RSI(Feature):
     def y_padding(self) -> float:
         return 0.05
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         period = int(params.get("period", 14))
         ob = float(params.get("overbought", 70))
         os = float(params.get("oversold", 30))
@@ -49,9 +49,9 @@ class RSI(Feature):
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         
-        return [
+        visuals = [
             LineOutput(
-                name=f"RSI {period}",
+                name=f"RSI_{period}",
                 data=rsi.where(pd.notnull(rsi), None).tolist(),
                 color=params.get("color", "#aaff00"),
                 width=2
@@ -69,3 +69,4 @@ class RSI(Feature):
                 color="#44ff44"
             )
         ]
+        return FeatureResult(visuals=visuals, data={f"RSI_{period}": rsi})

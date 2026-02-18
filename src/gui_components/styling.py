@@ -24,4 +24,13 @@ def setup_app_style(window):
         QDockWidget { border: 1px solid #333; }
         QDockWidget::title { background: #121212; padding-left: 5px; }
         QGroupBox { border: 1px solid #444; margin-top: 6px; font-weight: bold; }
+        QSplitter::handle:vertical {
+            height: 4px;
+            background-color: #333333;
+            border-top: 1px solid #444444;
+            border-bottom: 1px solid #444444;
+        }
+        QSplitter::handle:vertical:hover {
+            background-color: #555555;
+        }
     """)

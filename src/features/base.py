@@ -38,6 +38,11 @@ class HeatmapOutput(FeatureOutput):
     density: List[float] = None
     color_map: str = 'plasma' # matplotlib colormap name or similar
 
+@dataclass
+class FeatureResult:
+    visuals: List[FeatureOutput]
+    data: Dict[str, pd.Series] = None # Raw numerical data for signal extraction
+
 # --- Base Feature Class ---
 class Feature(ABC):
     """
@@ -94,9 +99,9 @@ class Feature(ABC):
         return 0.1
 
     @abstractmethod
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         """
         Main logic. Receives OHLCV DataFrame and current parameters.
-        Returns a list of FeatureOutput objects (Lines, Levels, Markers).
+        Returns a FeatureResult containing visual outputs and raw data.
         """
         pass

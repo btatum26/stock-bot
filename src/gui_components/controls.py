@@ -20,6 +20,9 @@ class ControlBar(QWidget):
         self.btn_random = QPushButton("Random")
         self.btn_random.setStyleSheet("background-color: #444; margin-left: 5px;")
         
+        self.btn_signals = QPushButton("Detect Signals")
+        self.btn_signals.setStyleSheet("background-color: #5500aa; color: white; font-weight: bold;")
+        
         layout.addWidget(QLabel("Ticker:"))
         layout.addWidget(self.ticker_input)
         layout.addWidget(self.ticker_history)
@@ -29,6 +32,7 @@ class ControlBar(QWidget):
         layout.addWidget(self.interval_combo)
         layout.addSpacing(15)
         layout.addWidget(self.btn_load)
+        layout.addWidget(self.btn_signals)
         layout.addStretch()
 
     def add_to_history(self, ticker):

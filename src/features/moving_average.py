@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 import pandas as pd
-from .base import Feature, FeatureOutput, LineOutput
+from .base import Feature, FeatureOutput, LineOutput, FeatureResult
 
 class MovingAverage(Feature):
     @property
@@ -23,7 +23,7 @@ class MovingAverage(Feature):
             "color": "#ff9900"
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         period = int(params.get("period", 50))
         ma_type = params.get("type", "SMA")
         color = params.get("color", "#ff9900")
@@ -35,11 +35,12 @@ class MovingAverage(Feature):
         
         data_list = ma.where(pd.notnull(ma), None).tolist()
         
-        return [
+        visuals = [
             LineOutput(
-                name=f"{ma_type} {period}",
+                name=f"{ma_type}_{period}",
                 data=data_list,
                 color=color,
                 width=2
             )
         ]
+        return FeatureResult(visuals=visuals, data={f"{ma_type}_{period}": ma})
