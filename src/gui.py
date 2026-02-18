@@ -13,11 +13,17 @@ from .features.feature_set import FeatureSet
 from .features.signals import SignalEngine
 from .features.base import LineOutput, LevelOutput, MarkerOutput, HeatmapOutput, FeatureResult
 
+# Signal Models
+from .signals.manager import SignalManager
+from .signals.ml_models import MLSignalModel
+from .signals.rule_based import DivergenceSignalModel
+
 # Modular Components
 from .gui_components.styling import setup_app_style
 from .gui_components.axes import DateAxis
 from .gui_components.controls import ControlBar
 from .gui_components.feature_dock import FeatureDock
+from .gui_components.signal_dock import SignalDock
 from .gui_components.plots import UnifiedPlot, CandleOverlay, VolumeOverlay, LineOverlay, LevelOverlay
 
 class ChartWindow(QMainWindow):
@@ -31,7 +37,9 @@ class ChartWindow(QMainWindow):
         self.engine = TradingEngine()
         self.available_features = load_features()
         self.active_features = {} # {name: {params, overlays, plot_item_ref}}
-        self.signal_engine = SignalEngine()
+        self.signal_manager = SignalManager("Default")
+        self.active_signal_models = {} # {name: {model, inputs, widget}}
+        self.signal_engine = SignalEngine(manager=self.signal_manager)
         self.signal_items = []
 
         # State
@@ -87,6 +95,12 @@ class ChartWindow(QMainWindow):
         self.feature_dock.btn_add_feat.clicked.connect(self.add_feature_ui)
         self.feature_dock.btn_save_set.clicked.connect(self.save_feature_set)
         self.feature_dock.btn_load_set.clicked.connect(self.load_feature_set)
+        
+        self.signal_dock = SignalDock(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.signal_dock)
+        self.signal_dock.btn_add_model.clicked.connect(self.add_signal_model_ui)
+        self.signal_dock.btn_save_set.clicked.connect(self.save_signal_set)
+        self.signal_dock.btn_load_set.clicked.connect(self.load_signal_set)
         
         self.showMaximized()
 
@@ -236,6 +250,7 @@ class ChartWindow(QMainWindow):
                 data.setdefault("temp_items", []).append(item)
 
         plot.update_all(self.df)
+        self.refresh_signal_features()
 
     def remove_feature(self, feat_name, widget, reorganize=True):
         if feat_name in self.active_features:
@@ -261,6 +276,7 @@ class ChartWindow(QMainWindow):
                     self._reorganize_subplots()
             del self.active_features[feat_name]
         widget.deleteLater()
+        self.refresh_signal_features()
 
     def _reorganize_subplots(self):
         """Manages splitter stretch factors."""
@@ -326,6 +342,135 @@ class ChartWindow(QMainWindow):
             self._reorganize_subplots()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load feature set: {e}")
+
+    # --- Signal Model Management ---
+    def add_signal_model_ui(self):
+        model_type = self.signal_dock.type_combo.currentData()
+        name, ok = QInputDialog.getText(self, "Add Signal Model", "Enter a name for this model:")
+        if not ok or not name: return
+        
+        if name in self.active_signal_models:
+            QMessageBox.warning(self, "Error", "A model with this name already exists.")
+            return
+
+        if model_type == "MLSignalModel":
+            model = MLSignalModel(name)
+        else:
+            model = DivergenceSignalModel(name)
+
+        self._add_signal_model(model)
+
+    def _add_signal_model(self, model):
+        # Collect all available data series names from active features
+        active_data_keys = []
+        for data in self.active_features.values():
+            if "raw_data" in data and data["raw_data"]:
+                active_data_keys.extend(data["raw_data"].keys())
+        
+        input_widgets, group_widget = self.signal_dock.create_model_widget(
+            model, active_data_keys,
+            lambda: self.update_signal_model(model.name),
+            self.remove_signal_model,
+            on_train=self.train_signal_model if isinstance(model, MLSignalModel) else None
+        )
+        
+        self.active_signal_models[model.name] = {
+            "model": model, "inputs": input_widgets, "widget": group_widget
+        }
+        if model not in self.signal_manager.models:
+            self.signal_manager.add_model(model)
+
+    def update_signal_model(self, name):
+        if name not in self.active_signal_models: return
+        data = self.active_signal_models[name]
+        model, widgets = data["model"], data["inputs"]
+        
+        if isinstance(model, MLSignalModel):
+            model.model_type = widgets["model_type"].currentText()
+            # Get selected features from QListWidget
+            selected_items = widgets["features_to_use"].selectedItems()
+            model.features_to_use = [item.text() for item in selected_items]
+            model.target_window = int(widgets["target_window"].text())
+            model.target_threshold = float(widgets["target_threshold"].text())
+        elif isinstance(model, DivergenceSignalModel):
+            model.indicator = widgets["indicator"].currentText()
+            model.lookback = int(widgets["lookback"].text())
+            model.order = int(widgets["order"].text())
+
+    def train_signal_model(self, model, group_widget):
+        if self.df is None or self.df.empty:
+            QMessageBox.warning(self, "Train Model", "Load data first.")
+            return
+
+        # Update model params first
+        self.update_signal_model(model.name)
+        
+        # Collect feature data
+        all_feature_data = {}
+        for feat_name, data in self.active_features.items():
+            if "raw_data" in data and data["raw_data"]:
+                all_feature_data.update(data["raw_data"])
+        
+        try:
+            success = model.train(self.df, all_feature_data)
+            if success:
+                QMessageBox.information(self, "Train Model", f"Model '{model.name}' trained successfully!")
+                # Update button text via the widget dict
+                if "btn_train" in self.active_signal_models[model.name]["inputs"]:
+                    self.active_signal_models[model.name]["inputs"]["btn_train"].setText(f"Train Model (Trained)")
+            else:
+                QMessageBox.warning(self, "Train Model", "Training failed. Check feature selection and data.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Training error: {e}")
+
+    def remove_signal_model(self, name, widget):
+        if name in self.active_signal_models:
+            model = self.active_signal_models[name]["model"]
+            if model in self.signal_manager.models:
+                self.signal_manager.models.remove(model)
+            if name in self.signal_dock.active_data_widgets:
+                del self.signal_dock.active_data_widgets[name]
+            del self.active_signal_models[name]
+        widget.deleteLater()
+
+    def save_signal_set(self):
+        name, ok = QInputDialog.getText(self, "Save Signal Set", "Enter a name for this signal set:")
+        if not ok or not name: return
+        
+        # Ensure all models are updated from UI
+        for m_name in self.active_signal_models:
+            self.update_signal_model(m_name)
+            
+        self.signal_manager.name = name
+        try:
+            self.signal_manager.save()
+            QMessageBox.information(self, "Save Signal Set", f"Signal set '{name}' saved successfully.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save signal set: {e}")
+
+    def load_signal_set(self):
+        available = SignalManager.list_available()
+        if not available:
+            QMessageBox.warning(self, "Load Signal Set", "No saved signal sets found.")
+            return
+
+        name, ok = QInputDialog.getItem(self, "Load Signal Set", "Select a signal set:", available, 0, False)
+        if not ok or not name: return
+
+        try:
+            # Clear current models
+            for m_name in list(self.active_signal_models.keys()):
+                data = self.active_signal_models[m_name]
+                self.remove_signal_model(m_name, data["widget"])
+            
+            self.signal_manager = SignalManager.load(name)
+            self.signal_engine.manager = self.signal_manager
+            
+            for model in self.signal_manager.models:
+                self._add_signal_model(model)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load signal set: {e}")
 
     def detect_signals(self):
         if self.df is None or self.df.empty: return
@@ -411,6 +556,14 @@ class ChartWindow(QMainWindow):
             
         # Initial X range
         self.main_plot.setXRange(max(0, len(self.df)-100), len(self.df))
+        self.refresh_signal_features()
+
+    def refresh_signal_features(self):
+        active_data_keys = []
+        for data in self.active_features.values():
+            if "raw_data" in data and data["raw_data"]:
+                active_data_keys.extend(data["raw_data"].keys())
+        self.signal_dock.refresh_features(active_data_keys)
 
 def main():
     app = QApplication(sys.argv)
