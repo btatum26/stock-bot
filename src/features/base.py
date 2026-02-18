@@ -1,0 +1,63 @@
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
+import pandas as pd
+
+# --- Output Types ---
+@dataclass
+class FeatureOutput:
+    name: str
+    color: str = 'white'
+
+@dataclass
+class LineOutput(FeatureOutput):
+    data: List[float] = None # Matches length of DF
+    width: int = 1
+
+@dataclass
+class LevelOutput(FeatureOutput):
+    price: float = 0.0
+    min_price: float = 0.0
+    max_price: float = 0.0
+    strength: float = 0.0
+
+@dataclass
+class MarkerOutput(FeatureOutput):
+    indices: List[int] = None
+    values: List[float] = None
+    shape: str = 'o' # 'o', 't', 's', 'd', '+', 'x'
+
+# --- Base Feature Class ---
+class Feature(ABC):
+    """
+    Abstract Base Class for all Stock Bot Features.
+    """
+    
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Display name of the feature."""
+        pass
+
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        """Short description of what the feature does."""
+        pass
+
+    @property
+    @abstractmethod
+    def parameters(self) -> Dict[str, Any]:
+        """
+        Dictionary of default parameters.
+        Example: {'window': 14, 'threshold': 0.01}
+        """
+        pass
+
+    @abstractmethod
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+        """
+        Main logic. Receives OHLCV DataFrame and current parameters.
+        Returns a list of FeatureOutput objects (Lines, Levels, Markers).
+        """
+        pass

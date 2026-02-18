@@ -29,7 +29,17 @@ class DataFetcher:
 
             if interval == "4h":
                 # Resample 1h data to 4h
-                df = df.resample('4h').agg({
+                # We need to ensure the bins align with market open (typically 9:30 AM ET)
+                # Using origin='start_day' aligns to midnight, so 9:30 is 9.5h offset.
+                # However, a simpler way for stocks is to just resample and drop incomplete/empty bins.
+                # But to avoid "shifting" bars based on start date, we must fix the origin.
+                # 'start' ensures the first bin starts at the first timestamp in the data.
+                # This is safer for consistent backtesting if we always fetch from the same start.
+                # But for incremental updates, we want fixed alignment.
+                # Let's align to the epoch (default) but ensure we handle timezone consistently.
+                
+                # Standard approach: resample with a closed 'left' and label 'left'
+                df = df.resample('4h', origin='start_day', closed='left', label='left').agg({
                     'Open': 'first',
                     'High': 'max',
                     'Low': 'min',

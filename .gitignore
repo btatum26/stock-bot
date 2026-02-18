@@ -15,7 +15,7 @@ data/*.db-journal
 data/*.sqlite
 
 # Temporary UI
-chart_viewer.py
-src/charting.py
+# run_gui.py
+# src/gui.py
 test_levels.py
 extract_tickers.py
