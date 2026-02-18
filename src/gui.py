@@ -147,6 +147,10 @@ class ChartWindow(QMainWindow):
         self.btn_random.clicked.connect(self.load_random)
         self.btn_random.setStyleSheet("background-color: #444; margin-left: 5px;")
         
+        self.btn_reload = QPushButton("Reload App")
+        self.btn_reload.clicked.connect(self.reload_app)
+        self.btn_reload.setStyleSheet("background-color: #552222; margin-left: 15px;")
+        
         c_layout.addWidget(QLabel("Ticker:"))
         c_layout.addWidget(self.ticker_input)
         c_layout.addWidget(self.ticker_history)
@@ -156,6 +160,7 @@ class ChartWindow(QMainWindow):
         c_layout.addWidget(self.interval_combo)
         c_layout.addSpacing(15)
         c_layout.addWidget(self.btn_load)
+        c_layout.addWidget(self.btn_reload)
         c_layout.addStretch()
         layout.addWidget(controls)
         
@@ -551,3 +556,28 @@ class ChartWindow(QMainWindow):
         pad = (y_max - y_min) * 0.1
         if pad == 0: pad = 1
         vb.setYRange(y_min - pad, y_max + pad, padding=0)
+
+    def reload_app(self):
+        # Full restart is hard in-process, but we can reset the state
+        print("Reloading App State...")
+        self.main_plot.clear()
+        self.layout_widget.clear() # Clears all rows
+        self.sub_plots = {}
+        self.active_features = {}
+        self.feature_dock.close()
+        self.removeDockWidget(self.feature_dock)
+        
+        # Re-init UI parts
+        self.main_plot = self.layout_widget.addPlot(row=0, col=0)
+        self._init_ui_logic() # Split UI init if possible, but simpler to just clear data
+        # Actually, simpler "Reload" usually means re-import code. 
+        # For a running GUI, "Reload Data" is what we have. 
+        # "Restart App" requires os.execl.
+        import os
+        os.execl(sys.executable, sys.executable, *sys.argv)
+
+def main():
+    app = QApplication(sys.argv)
+    window = ChartWindow()
+    window.showMaximized() # Open maximized
+    sys.exit(app.exec())
