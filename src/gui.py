@@ -2,19 +2,18 @@ import sys
 import pandas as pd
 import numpy as np
 import random
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter, QTabWidget)
 from PyQt6.QtCore import Qt, QRectF
 import pyqtgraph as pg
 
 from .database import Database
-from .engine import TradingEngine
+from .engine import TradingEngine, SignalEvaluation
 from .features.loader import load_features
 from .features.feature_set import FeatureSet
-from .features.signals import SignalEngine
 from .features.base import LineOutput, LevelOutput, MarkerOutput, HeatmapOutput, FeatureResult
+from .strategy import Strategy
 
 # Signal Models
-from .signals.manager import SignalManager
 from .signals.ml_models import MLSignalModel
 from .signals.rule_based import DivergenceSignalModel
 
@@ -23,7 +22,7 @@ from .gui_components.styling import setup_app_style
 from .gui_components.axes import DateAxis
 from .gui_components.controls import ControlBar
 from .gui_components.feature_dock import FeatureDock
-from .gui_components.signal_dock import SignalDock
+from .gui_components.signals_tab import SignalsTab
 from .gui_components.plots import UnifiedPlot, CandleOverlay, VolumeOverlay, LineOverlay, LevelOverlay
 
 class ChartWindow(QMainWindow):
@@ -37,24 +36,25 @@ class ChartWindow(QMainWindow):
         self.engine = TradingEngine()
         self.available_features = load_features()
         self.active_features = {} # {name: {params, overlays, plot_item_ref}}
-        self.signal_manager = SignalManager("Default")
-        self.active_signal_models = {} # {name: {model, inputs, widget}}
-        self.signal_engine = SignalEngine(manager=self.signal_manager)
-        self.signal_items = []
-
+        self.strategy = Strategy("Default")
+        
         # State
         self.df = None
         self.timestamps = []
         self.sub_plots = {} # {feat_name: UnifiedPlot}
         self.v_lines = []
+        self.signal_items = []
 
         self._init_ui()
 
     def _init_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
+        
+        # --- Tab 1: Chart View ---
+        chart_page = QWidget()
+        chart_layout = QVBoxLayout(chart_page)
+        chart_layout.setContentsMargins(0, 0, 0, 0)
         
         # 1. Controls
         self.controls = ControlBar(self)
@@ -62,13 +62,13 @@ class ChartWindow(QMainWindow):
         self.controls.ticker_history.currentIndexChanged.connect(self.load_from_history)
         self.controls.btn_load.clicked.connect(self.load_chart)
         self.controls.btn_random.clicked.connect(self.load_random)
-        self.controls.btn_signals.clicked.connect(self.detect_signals)
-        layout.addWidget(self.controls)
+        # self.controls.btn_signals removed from feature page logic
+        chart_layout.addWidget(self.controls)
         
         # 2. Main Plot Area
         self.plot_splitter = QSplitter(Qt.Orientation.Vertical)
         self.plot_splitter.setHandleWidth(6)
-        layout.addWidget(self.plot_splitter)
+        chart_layout.addWidget(self.plot_splitter)
         
         # Container for main plot
         self.main_plot_widget = pg.GraphicsLayoutWidget()
@@ -90,17 +90,20 @@ class ChartWindow(QMainWindow):
         
         self._setup_crosshair()
         
+        self.tabs.addTab(chart_page, "Chart Analysis")
+        
+        # --- Tab 2: Strategy & Signals ---
+        self.signals_tab = SignalsTab(self)
+        self.signals_tab.btn_run_backtest.clicked.connect(self.run_composite_backtest)
+        self.tabs.addTab(self.signals_tab, "Strategy & Signals")
+
+        # Docks
         self.feature_dock = FeatureDock(self.available_features, self)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.feature_dock)
         self.feature_dock.btn_add_feat.clicked.connect(self.add_feature_ui)
-        self.feature_dock.btn_save_set.clicked.connect(self.save_feature_set)
-        self.feature_dock.btn_load_set.clicked.connect(self.load_feature_set)
-        
-        self.signal_dock = SignalDock(self)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.signal_dock)
-        self.signal_dock.btn_add_model.clicked.connect(self.add_signal_model_ui)
-        self.signal_dock.btn_save_set.clicked.connect(self.save_signal_set)
-        self.signal_dock.btn_load_set.clicked.connect(self.load_signal_set)
+        self.feature_dock.btn_save_strategy.clicked.connect(self.save_strategy)
+        self.feature_dock.btn_load_strategy.clicked.connect(self.load_strategy)
+        self.feature_dock.btn_rename_strategy.clicked.connect(self.rename_strategy)
         
         self.showMaximized()
 
@@ -190,6 +193,9 @@ class ChartWindow(QMainWindow):
             container_widget = new_plot_widget
             
             new_plot = UnifiedPlot()
+            if feature.y_range:
+                new_plot.set_fixed_y_range(feature.y_range[0], feature.y_range[1], padding=feature.y_padding)
+            
             new_plot.setXLink(self.main_plot)
             new_plot.getAxis('left').setWidth(60) # Axis alignment
             new_plot_widget.addItem(new_plot)
@@ -250,7 +256,6 @@ class ChartWindow(QMainWindow):
                 data.setdefault("temp_items", []).append(item)
 
         plot.update_all(self.df)
-        self.refresh_signal_features()
 
     def remove_feature(self, feat_name, widget, reorganize=True):
         if feat_name in self.active_features:
@@ -276,7 +281,6 @@ class ChartWindow(QMainWindow):
                     self._reorganize_subplots()
             del self.active_features[feat_name]
         widget.deleteLater()
-        self.refresh_signal_features()
 
     def _reorganize_subplots(self):
         """Manages splitter stretch factors."""
@@ -287,235 +291,109 @@ class ChartWindow(QMainWindow):
         for i in range(1, self.plot_splitter.count()):
             self.plot_splitter.setStretchFactor(i, 2)
 
-    def save_feature_set(self):
-        if not self.active_features:
-            QMessageBox.warning(self, "Save Feature Set", "No active features to save.")
-            return
+    def rename_strategy(self):
+        name, ok = QInputDialog.getText(self, "Rename Strategy", "Enter new name:", text=self.strategy.name)
+        if ok and name:
+            self.strategy.name = name
+            self.feature_dock.lbl_strategy_name.setText(f"Strategy: {name}")
 
-        name, ok = QInputDialog.getText(self, "Save Feature Set", "Enter a name for this feature set:")
-        if not ok or not name:
-            return
-
-        fs = FeatureSet(name)
+    def save_strategy(self):
+        name, ok = QInputDialog.getText(self, "Save Strategy", "Enter a name for this strategy:", text=self.strategy.name)
+        if not ok or not name: return
+        
+        # 1. Capture current feature config
+        feature_config = {}
         for feat_name, data in self.active_features.items():
             params = {}
             for k, w in data["inputs"].items():
-                if isinstance(w, QComboBox):
-                    params[k] = w.currentText()
-                elif isinstance(w, QCheckBox):
-                    params[k] = w.isChecked()
-                else: # QLineEdit
-                    params[k] = w.text()
-            fs.add_feature(feat_name, params)
+                if isinstance(w, QComboBox): params[k] = w.currentText()
+                elif isinstance(w, QCheckBox): params[k] = w.isChecked()
+                else: params[k] = w.text()
+            feature_config[feat_name] = params
+            
+        self.strategy.name = name
+        self.strategy.feature_config = feature_config
+        self.feature_dock.lbl_strategy_name.setText(f"Strategy: {name}")
         
         try:
-            fs.save()
-            QMessageBox.information(self, "Save Feature Set", f"Feature set '{name}' saved successfully.")
+            self.strategy.save()
+            QMessageBox.information(self, "Save Strategy", f"Strategy '{name}' saved successfully.")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save feature set: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save strategy: {e}")
 
-    def load_feature_set(self):
-        available = FeatureSet.list_available()
+    def load_strategy(self):
+        available = Strategy.list_available()
         if not available:
-            QMessageBox.warning(self, "Load Feature Set", "No saved feature sets found.")
+            QMessageBox.warning(self, "Load Strategy", "No saved strategies found.")
             return
 
-        name, ok = QInputDialog.getItem(self, "Load Feature Set", "Select a feature set:", available, 0, False)
-        if not ok or not name:
-            return
+        name, ok = QInputDialog.getItem(self, "Load Strategy", "Select a strategy:", available, 0, False)
+        if not ok or not name: return
 
         try:
-            # Clear current features
+            # 1. Clear current features
             for feat_name in list(self.active_features.keys()):
                 data = self.active_features[feat_name]
                 self.remove_feature(feat_name, data["widget"], reorganize=False)
+            self._reorganize_subplots()
+
+            # 2. Load strategy
+            self.strategy = Strategy.load(name)
+            self.feature_dock.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
             
-            # Load new set
-            QMessageBox.warning(self, "load feature set", "loading feature set")
-            fs = FeatureSet.load(name)
-            for feat_name, params in fs.features.items():
+            # 3. Add features from config
+            for feat_name, params in self.strategy.feature_config.items():
                 if feat_name in self.available_features:
                     self._add_feature_by_name(feat_name, initial_values=params)
-                else:
-                    print(f"Warning: Feature '{feat_name}' not found.")
-            
-            self._reorganize_subplots()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load feature set: {e}")
-
-    # --- Signal Model Management ---
-    def add_signal_model_ui(self):
-        model_type = self.signal_dock.type_combo.currentData()
-        name, ok = QInputDialog.getText(self, "Add Signal Model", "Enter a name for this model:")
-        if not ok or not name: return
-        
-        if name in self.active_signal_models:
-            QMessageBox.warning(self, "Error", "A model with this name already exists.")
-            return
-
-        if model_type == "MLSignalModel":
-            model = MLSignalModel(name)
-        else:
-            model = DivergenceSignalModel(name)
-
-        self._add_signal_model(model)
-
-    def _add_signal_model(self, model):
-        # Collect all available data series names from active features
-        active_data_keys = []
-        for data in self.active_features.values():
-            if "raw_data" in data and data["raw_data"]:
-                active_data_keys.extend(data["raw_data"].keys())
-        
-        input_widgets, group_widget = self.signal_dock.create_model_widget(
-            model, active_data_keys,
-            lambda: self.update_signal_model(model.name),
-            self.remove_signal_model,
-            on_train=self.train_signal_model if isinstance(model, MLSignalModel) else None
-        )
-        
-        self.active_signal_models[model.name] = {
-            "model": model, "inputs": input_widgets, "widget": group_widget
-        }
-        if model not in self.signal_manager.models:
-            self.signal_manager.add_model(model)
-
-    def update_signal_model(self, name):
-        if name not in self.active_signal_models: return
-        data = self.active_signal_models[name]
-        model, widgets = data["model"], data["inputs"]
-        
-        if isinstance(model, MLSignalModel):
-            model.model_type = widgets["model_type"].currentText()
-            # Get selected features from QListWidget
-            selected_items = widgets["features_to_use"].selectedItems()
-            model.features_to_use = [item.text() for item in selected_items]
-            model.target_window = int(widgets["target_window"].text())
-            model.target_threshold = float(widgets["target_threshold"].text())
-        elif isinstance(model, DivergenceSignalModel):
-            model.indicator = widgets["indicator"].currentText()
-            model.lookback = int(widgets["lookback"].text())
-            model.order = int(widgets["order"].text())
-
-    def train_signal_model(self, model, group_widget):
-        if self.df is None or self.df.empty:
-            QMessageBox.warning(self, "Train Model", "Load data first.")
-            return
-
-        # Update model params first
-        self.update_signal_model(model.name)
-        
-        # Collect feature data
-        all_feature_data = {}
-        for feat_name, data in self.active_features.items():
-            if "raw_data" in data and data["raw_data"]:
-                all_feature_data.update(data["raw_data"])
-        
-        try:
-            success = model.train(self.df, all_feature_data)
-            if success:
-                QMessageBox.information(self, "Train Model", f"Model '{model.name}' trained successfully!")
-                # Update button text via the widget dict
-                if "btn_train" in self.active_signal_models[model.name]["inputs"]:
-                    self.active_signal_models[model.name]["inputs"]["btn_train"].setText(f"Train Model (Trained)")
-            else:
-                QMessageBox.warning(self, "Train Model", "Training failed. Check feature selection and data.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Training error: {e}")
-
-    def remove_signal_model(self, name, widget):
-        if name in self.active_signal_models:
-            model = self.active_signal_models[name]["model"]
-            if model in self.signal_manager.models:
-                self.signal_manager.models.remove(model)
-            if name in self.signal_dock.active_data_widgets:
-                del self.signal_dock.active_data_widgets[name]
-            del self.active_signal_models[name]
-        widget.deleteLater()
-
-    def save_signal_set(self):
-        name, ok = QInputDialog.getText(self, "Save Signal Set", "Enter a name for this signal set:")
-        if not ok or not name: return
-        
-        # Ensure all models are updated from UI
-        for m_name in self.active_signal_models:
-            self.update_signal_model(m_name)
-            
-        self.signal_manager.name = name
-        try:
-            self.signal_manager.save()
-            QMessageBox.information(self, "Save Signal Set", f"Signal set '{name}' saved successfully.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save signal set: {e}")
-
-    def load_signal_set(self):
-        available = SignalManager.list_available()
-        if not available:
-            QMessageBox.warning(self, "Load Signal Set", "No saved signal sets found.")
-            return
-
-        name, ok = QInputDialog.getItem(self, "Load Signal Set", "Select a signal set:", available, 0, False)
-        if not ok or not name: return
-
-        try:
-            # Clear current models
-            for m_name in list(self.active_signal_models.keys()):
-                data = self.active_signal_models[m_name]
-                self.remove_signal_model(m_name, data["widget"])
-            
-            self.signal_manager = SignalManager.load(name)
-            self.signal_engine.manager = self.signal_manager
-            
-            for model in self.signal_manager.models:
-                self._add_signal_model(model)
                 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load signal set: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load strategy: {e}")
+            import traceback
+            traceback.print_exc()
 
-    def detect_signals(self):
-        if self.df is None or self.df.empty: return
-        
-        # Collect data from all active features
-        all_feature_data = {}
-        for feat_name, data in self.active_features.items():
-            if "raw_data" in data and data["raw_data"]:
-                all_feature_data.update(data["raw_data"])
-        
-        if not all_feature_data:
-            QMessageBox.warning(self, "Signal Detection", "No feature data available. Add features like SMA or RSI first.")
+    def run_composite_backtest(self):
+        if self.df is None or self.df.empty:
+            QMessageBox.warning(self, "Backtest", "Load data first.")
             return
 
-        # Detect
-        signals = self.signal_engine.extract_signals(self.df, all_feature_data)
+        strat_name = self.signals_tab.strategy_combo.currentText()
         
-        # Clear old
-        for item in self.signal_items:
-            self.main_plot.removeItem(item)
-        self.signal_items = []
-        
-        if not signals:
-            QMessageBox.information(self, "Signal Detection", "No signals detected with current settings.")
+        if not strat_name:
+            QMessageBox.warning(self, "Backtest", "Select a Strategy.")
             return
 
-        # Plot Buy/Sell markers
-        buy_indices = [s.index for s in signals if s.side == 'buy']
-        buy_prices = [s.value for s in signals if s.side == 'buy']
-        sell_indices = [s.index for s in signals if s.side == 'sell']
-        sell_prices = [s.value for s in signals if s.side == 'sell']
-        
-        if buy_indices:
-            item = pg.ScatterPlotItem(x=buy_indices, y=[p * 0.98 for p in buy_prices], 
-                                       symbol='t1', size=15, brush=pg.mkBrush('#00ff00'))
-            self.main_plot.addItem(item)
-            self.signal_items.append(item)
+        try:
+            # Load strategy and features
+            strategy = Strategy.load(strat_name)
             
-        if sell_indices:
-            item = pg.ScatterPlotItem(x=sell_indices, y=[p * 1.02 for p in sell_prices], 
-                                       symbol='t', size=15, brush=pg.mkBrush('#ff0000'))
-            self.main_plot.addItem(item)
-            self.signal_items.append(item)
+            # Re-compute features for this strategy on current data
+            all_feature_data = {}
+            for feat_name, params in strategy.feature_config.items():
+                if feat_name in self.available_features:
+                    feat = self.available_features[feat_name]
+                    result = feat.compute(self.df, params)
+                    if isinstance(result, FeatureResult):
+                         if result.data: all_feature_data.update(result.data)
+                    # Support old return type if any
+                    elif hasattr(result, 'data'):
+                         if result.data: all_feature_data.update(result.data)
+
+            # Generate signals
+            events = strategy.generate_all_signals(self.df, all_feature_data)
             
-        QMessageBox.information(self, "Signal Detection", f"Detected {len(signals)} signals!")
+            # Evaluate
+            evaluation = SignalEvaluation(forward_window=10, threshold=0.015)
+            for e in events:
+                evaluation.evaluate(self.df, e)
+            
+            # Update Tab UI
+            self.signals_tab.update_results(evaluation)
+            QMessageBox.information(self, "Backtest Complete", f"Processed {len(events)} signals.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Backtest Error", f"An error occurred: {e}")
+            import traceback
+            traceback.print_exc()
 
     def load_from_history(self, index):
         if index <= 0: return 
@@ -556,14 +434,6 @@ class ChartWindow(QMainWindow):
             
         # Initial X range
         self.main_plot.setXRange(max(0, len(self.df)-100), len(self.df))
-        self.refresh_signal_features()
-
-    def refresh_signal_features(self):
-        active_data_keys = []
-        for data in self.active_features.values():
-            if "raw_data" in data and data["raw_data"]:
-                active_data_keys.extend(data["raw_data"].keys())
-        self.signal_dock.refresh_features(active_data_keys)
 
 def main():
     app = QApplication(sys.argv)

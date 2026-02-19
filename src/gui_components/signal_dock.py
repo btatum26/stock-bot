@@ -5,7 +5,7 @@ from ..signals.rule_based import DivergenceSignalModel
 
 class SignalDock(QDockWidget):
     def __init__(self, parent=None):
-        super().__init__("Signal Models", parent)
+        super().__init__("Strategy Models", parent)
         self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
         self.setMinimumWidth(350)
         
@@ -13,18 +13,28 @@ class SignalDock(QDockWidget):
         main_layout = QVBoxLayout(main_widget)
         
         # 1. Controls (Add/Save/Load)
+        self.lbl_strategy_name = QLabel("Strategy: Default")
+        self.lbl_strategy_name.setStyleSheet("font-weight: bold; font-size: 14px; color: #5500aa;")
+        self.btn_rename_strategy = QPushButton("Rename")
+        
+        name_layout = QHBoxLayout()
+        name_layout.addWidget(self.lbl_strategy_name)
+        name_layout.addWidget(self.btn_rename_strategy)
+
         self.type_combo = QComboBox()
         self.type_combo.addItem("ML Model", "MLSignalModel")
         self.type_combo.addItem("RSI Divergence", "DivergenceSignalModel")
         
         self.btn_add_model = QPushButton("Add Signal Model")
-        self.btn_save_set = QPushButton("Save Set")
-        self.btn_load_set = QPushButton("Load Set")
+        self.btn_save_strategy = QPushButton("Save Strategy")
+        self.btn_load_strategy = QPushButton("Load Strategy")
         
         h_layout = QHBoxLayout()
-        h_layout.addWidget(self.btn_save_set)
-        h_layout.addWidget(self.btn_load_set)
+        h_layout.addWidget(self.btn_save_strategy)
+        h_layout.addWidget(self.btn_load_strategy)
 
+        main_layout.addLayout(name_layout)
+        main_layout.addSpacing(5)
         main_layout.addWidget(QLabel("Add Signal Model:"))
         main_layout.addWidget(self.type_combo)
         main_layout.addWidget(self.btn_add_model)

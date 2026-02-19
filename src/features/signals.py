@@ -2,15 +2,14 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
-from src.signals.manager import SignalManager
 from src.signals.base import SignalEvent
 
 class SignalEngine:
     """
     Analyzes feature data to detect specific trading events.
     """
-    def __init__(self, manager: SignalManager = None):
-        self.manager = manager
+    def __init__(self):
+        pass
     
     @staticmethod
     def detect_crossover(series1: pd.Series, series2: pd.Series) -> pd.Series:
@@ -55,15 +54,11 @@ class SignalEngine:
 
     def extract_signals(self, df: pd.DataFrame, feature_data: Dict[str, pd.Series]) -> List[SignalEvent]:
         """
-        Extracts signals from feature data using the current manager and built-in rules.
+        Extracts signals from feature data using built-in hardcoded rules (Legacy/Simple).
         """
         events = []
         
-        # 1. Use the modular SignalManager if available
-        if self.manager:
-            events.extend(self.manager.generate_all_signals(df, feature_data))
-
-        # 2. Built-in hardcoded rules (Legacy/Simple)
+        # Built-in hardcoded rules (Legacy/Simple)
         # Bullish/Bearish MA Crossover
         ma_keys = [k for k in feature_data.keys() if "MA" in k]
         if len(ma_keys) >= 2:
@@ -90,12 +85,27 @@ class SignalEngine:
             for idx in cross_30[cross_30 != 0].index:
                 iloc = df.index.get_loc(idx)
                 if cross_30[idx] == 1:
-                     events.append(SignalEvent("RSI Oversold Exit", iloc, idx, df['Close'].iloc[iloc], 'buy', "RSI crossed above 30"))
+                     # Corrected syntax for SignalEvent creation based on usage elsewhere or assuming correct params
+                     events.append(SignalEvent(
+                         name="RSI Oversold Exit", 
+                         index=iloc, 
+                         timestamp=idx, 
+                         value=df['Close'].iloc[iloc], 
+                         side='buy', 
+                         description="RSI crossed above 30"
+                     ))
             
             cross_70 = self.detect_threshold(rsi, 70)
             for idx in cross_70[cross_70 != 0].index:
                 iloc = df.index.get_loc(idx)
                 if cross_70[idx] == -1:
-                     events.append(SignalEvent("RSI Overbought Exit", iloc, idx, df['Close'].iloc[iloc], 'sell', "RSI crossed below 70"))
+                     events.append(SignalEvent(
+                         name="RSI Overbought Exit", 
+                         index=iloc, 
+                         timestamp=idx, 
+                         value=df['Close'].iloc[iloc], 
+                         side='sell', 
+                         description="RSI crossed below 70"
+                     ))
 
         return events

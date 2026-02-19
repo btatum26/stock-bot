@@ -185,6 +185,8 @@ class UnifiedPlot(pg.PlotItem):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.overlays = []
+        self.fixed_y_range = None
+        self.y_padding = 0.1
         self.showGrid(x=False, y=True, alpha=0.15)
         # Explicitly enable mouse on the ViewBox
         self.vb.setMouseEnabled(x=True, y=False)
@@ -193,6 +195,11 @@ class UnifiedPlot(pg.PlotItem):
         self.vb.setZValue(10)
         self.vb.sigXRangeChanged.connect(self.auto_scale_y)
         
+    def set_fixed_y_range(self, y_min, y_max, padding=0.1):
+        self.fixed_y_range = (y_min, y_max)
+        self.y_padding = padding
+        self.setYRange(y_min, y_max, padding=padding)
+
     def add_overlay(self, overlay):
         self.overlays.append(overlay)
         overlay.add_to_plot(self)
@@ -212,6 +219,9 @@ class UnifiedPlot(pg.PlotItem):
         self.auto_scale_y()
 
     def auto_scale_y(self):
+        if self.fixed_y_range:
+            return
+
         x_range = self.vb.viewRange()[0]
         x_min, x_max = x_range
         
@@ -233,5 +243,5 @@ class UnifiedPlot(pg.PlotItem):
                 y_max = max(y_max, omax)
 
         if y_min != np.inf:
-            pad = (y_max - y_min) * 0.1 or 1.0
+            pad = (y_max - y_min) * self.y_padding or 1.0
             self.setYRange(y_min - pad, y_max + pad, padding=0)

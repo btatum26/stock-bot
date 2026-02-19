@@ -3,31 +3,44 @@ from PyQt6.QtCore import Qt
 
 class FeatureDock(QDockWidget):
     def __init__(self, available_features, parent=None):
-        super().__init__("Features", parent)
+        super().__init__("Feature Analysis", parent)
         self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
         self.setMinimumWidth(300)
         
         main_widget = QWidget()
         main_layout = QVBoxLayout(main_widget)
         
-        # 1. Controls (Add/Save/Load)
+        # 1. Strategy Management
+        strat_group = QGroupBox("Strategy Control")
+        strat_layout = QVBoxLayout(strat_group)
+        
+        self.lbl_strategy_name = QLabel("Strategy: Default")
+        self.lbl_strategy_name.setStyleSheet("font-weight: bold; color: #aaff00; font-size: 14px;")
+        strat_layout.addWidget(self.lbl_strategy_name)
+        
+        strat_btns = QHBoxLayout()
+        self.btn_save_strategy = QPushButton("Save")
+        self.btn_load_strategy = QPushButton("Load")
+        self.btn_rename_strategy = QPushButton("Rename")
+        
+        for b in [self.btn_save_strategy, self.btn_load_strategy, self.btn_rename_strategy]:
+            strat_btns.addWidget(b)
+        strat_layout.addLayout(strat_btns)
+        
+        main_layout.addWidget(strat_group)
+        main_layout.addSpacing(10)
+
+        # 2. Controls (Add Feature)
         self.feat_combo = QComboBox()
         self.btn_add_feat = QPushButton("Add Feature")
-        self.btn_save_set = QPushButton("Save Set")
-        self.btn_load_set = QPushButton("Load Set")
         
         sorted_feats = sorted(available_features.values(), key=lambda f: (f.category, f.name))
         for f in sorted_feats:
             self.feat_combo.addItem(f"{f.category}: {f.name}", userData=f.name)
         
-        h_layout = QHBoxLayout()
-        h_layout.addWidget(self.btn_save_set)
-        h_layout.addWidget(self.btn_load_set)
-
         main_layout.addWidget(QLabel("Add Feature:"))
         main_layout.addWidget(self.feat_combo)
         main_layout.addWidget(self.btn_add_feat)
-        main_layout.addLayout(h_layout)
         main_layout.addSpacing(10)
         main_layout.addWidget(QLabel("Active Features:"))
 

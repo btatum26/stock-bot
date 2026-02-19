@@ -2,6 +2,54 @@ import time
 from datetime import datetime
 from .database import Database
 from .fetcher import DataFetcher
+from .features.signals import SignalEvent
+from typing import List, Dict, Any, Optional
+import pandas as pd
+
+class SignalEvaluation:
+    """
+    Tracks and evaluates the performance of signals generated during a backtest.
+    """
+    def __init__(self, forward_window=5, threshold=0.01):
+        self.forward_window = forward_window
+        self.threshold = threshold
+        self.total_signals = 0
+        self.correct_calls = 0
+        self.incorrect_calls = 0
+        self.results = [] # List of {timestamp, side, entry_price, exit_price, pnl, success}
+
+    def evaluate(self, df: pd.DataFrame, event: SignalEvent):
+        iloc = event.index
+        if iloc + self.forward_window >= len(df):
+            return None # Not enough future data to evaluate
+        
+        entry_price = event.value
+        future_prices = df['Close'].iloc[iloc+1 : iloc+1+self.forward_window]
+        
+        # Simple success metric: Did price move in our direction within the window?
+        if event.side == 'buy':
+            max_forward = future_prices.max()
+            pnl = (max_forward - entry_price) / entry_price
+            success = pnl >= self.threshold
+        else: # sell
+            min_forward = future_prices.min()
+            pnl = (entry_price - min_forward) / entry_price
+            success = pnl >= self.threshold
+
+        self.total_signals += 1
+        if success: self.correct_calls += 1
+        else: self.incorrect_calls += 1
+
+        res = {
+            "timestamp": event.timestamp,
+            "side": event.side,
+            "entry": entry_price,
+            "max_fwd_pnl": pnl,
+            "success": success,
+            "model": event.name
+        }
+        self.results.append(res)
+        return res
 
 class Strategy:
     def __init__(self):

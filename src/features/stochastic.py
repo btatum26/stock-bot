@@ -20,6 +20,14 @@ class Stochastic(Feature):
         return "new"
 
     @property
+    def y_range(self) -> List[float]:
+        return [0, 100]
+
+    @property
+    def y_padding(self) -> float:
+        return 0.05
+
+    @property
     def parameters(self) -> Dict[str, Any]:
         return {
             "k_period": 14,
