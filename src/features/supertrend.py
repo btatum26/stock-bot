@@ -1,7 +1,6 @@
 from typing import Dict, Any, List
 import pandas as pd
-import numpy as np
-from .base import Feature, FeatureOutput, LineOutput
+from .base import Feature, FeatureOutput, LineOutput, FeatureResult
 
 class Supertrend(Feature):
     @property
@@ -25,7 +24,7 @@ class Supertrend(Feature):
             "color_down": "#ff0000"
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         period = int(params.get("period", 10))
         multiplier = float(params.get("multiplier", 3.0))
         
@@ -83,18 +82,15 @@ class Supertrend(Feature):
                 supertrend[i] = final_upper[i]
 
         # Convert 0.0 to None for initial period
-        results = []
         for i in range(len(supertrend)):
             if i < period: supertrend[i] = None
-        
-        # Split into Green/Red lines for visualization? 
-        # Or just one line that changes color? 
-        # FeatureOutput defines one color. So we return two lines, one for Up, one for Down.
         
         up_line = [val if t == 1 else None for val, t in zip(supertrend, trend)]
         down_line = [val if t == -1 else None for val, t in zip(supertrend, trend)]
         
-        return [
+        visuals = [
             LineOutput(name="Supertrend Up", data=up_line, color=params.get("color_up"), width=2),
             LineOutput(name="Supertrend Down", data=down_line, color=params.get("color_down"), width=2)
         ]
+        
+        return FeatureResult(visuals=visuals, data={"Supertrend": pd.Series(supertrend, index=df.index), "Trend": pd.Series(trend, index=df.index)})

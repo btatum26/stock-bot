@@ -1,105 +1,171 @@
 import json
 import os
+import pickle
+import importlib.util
 from typing import Dict, List, Any, Optional
 import pandas as pd
-from .signals.base import SignalModel, SignalEvent
-from .signals.ml_models import MLSignalModel
-from .signals.rule_based import DivergenceSignalModel
+from .signals.base import SignalEvent
+
+SCRIPT_TEMPLATE = """import pandas as pd
+import numpy as np
+from src.signals.base import SignalModel
+
+class StrategySignal(SignalModel):
+    def generate_signals(self, df: pd.DataFrame, feature_data: dict) -> pd.Series:
+        \"\"\"
+        df: DataFrame with OHLCV data ('Open', 'High', 'Low', 'Close', 'Volume')
+        feature_data: Dict of feature results (e.g. {'RSI_14': Series, ...})
+        \"\"\"
+        signals = pd.Series(0, index=df.index)
+        
+        # Example using OHLCV:
+        # close = df['Close']
+        # volume = df['Volume']
+        
+        # Example: 
+        # 1 = Buy (Green Triangle Up)
+        # -1 = Sell (Red Triangle Down)
+        # 2 = Neutral (Yellow Circle)
+        
+        # if 'RSI_14' in feature_data:
+        #     rsi = feature_data['RSI_14']
+        #     signals[(rsi < 30)] = 1
+        #     signals[(rsi > 70)] = -1
+        #     signals[(rsi >= 45) & (rsi <= 55)] = 2
+            
+        return signals
+"""
 
 class Strategy:
     """
     Represents a trading strategy which consists of:
     1. A set of features (configuration).
-    2. A set of models (signals) that use these features.
+    2. A Python script file that defines signal generation logic.
     
-    Can be serialized/deserialized.
+    Both are pickled into a single .strat file.
     """
-    def __init__(self, name: str, models: List[SignalModel] = None, feature_config: Dict[str, Any] = None):
+    def __init__(self, name: str, feature_config: Dict[str, Any] = None, script_content: str = None, directory: str = "strategies"):
         self.name = name
-        self.models = models or []
-        self.feature_config = feature_config or {} # {feat_name: {params}}
+        self.feature_config = feature_config or {} 
+        self.script_content = script_content
+        self.directory = directory
+        self._ensure_script_exists()
 
-    def add_model(self, model: SignalModel):
-        # Prevent duplicates by name
-        for m in self.models:
-            if m.name == model.name:
-                self.models.remove(m)
-                break
-        self.models.append(model)
+    @property
+    def script_path(self):
+        # Working script path (extracted from pickle for execution/editing)
+        return os.path.join(self.directory, "working_scripts", f"{self.name}.py")
 
-    def generate_all_signals(self, df: pd.DataFrame, feature_data: Dict[str, pd.Series]) -> List[SignalEvent]:
-        events = []
-        for model in self.models:
+    def _ensure_script_exists(self):
+        os.makedirs(os.path.dirname(self.script_path), exist_ok=True)
+        
+        # If we have content (from a load), we write it to the working file ONLY if it doesn't exist
+        if self.script_content is not None and not os.path.exists(self.script_path):
+            with open(self.script_path, 'w') as f:
+                f.write(self.script_content)
+        # If no content and no file, use template
+        elif not os.path.exists(self.script_path):
+            with open(self.script_path, 'w') as f:
+                f.write(SCRIPT_TEMPLATE)
+
+    def generate_signals(self, df: pd.DataFrame, feature_data: Dict[str, pd.Series]) -> List[SignalEvent]:
+        """
+        Dynamically loads the StrategySignal class from the script file and executes it.
+        Force reloads the module to pick up changes from VS Code.
+        """
+        if not os.path.exists(self.script_path):
+            return []
+
+        try:
+            # Dynamic Import with unique name to avoid caching issues
+            module_name = f"strategy_script_{self.name}"
+            spec = importlib.util.spec_from_file_location(module_name, self.script_path)
+            module = importlib.util.module_from_spec(spec)
+            
+            # Remove from sys.modules if it exists to force a fresh load
+            import sys
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+                
+            spec.loader.exec_module(module)
+            
+            if not hasattr(module, 'StrategySignal'):
+                print(f"Error in '{self.script_path}': Class 'StrategySignal' not found.")
+                return []
+            
+            model = module.StrategySignal()
             signals = model.generate_signals(df, feature_data)
-            # Find non-zero signals
+            
+            # Convert Series to Events
+            events = []
             signal_indices = signals[signals != 0].index
             for idx in signal_indices:
                 iloc = df.index.get_loc(idx)
-                side = 'buy' if signals[idx] == 1 else 'sell'
+                val = signals[idx]
+                
+                side = 'buy' if val == 1 else 'sell' if val == -1 else 'neutral' if val == 2 else 'unknown'
+                if side == 'unknown': continue
+                
                 events.append(SignalEvent(
-                    name=model.name,
+                    name=f"{self.name}_Signal",
                     index=iloc,
                     timestamp=idx,
                     value=df['Close'].iloc[iloc],
                     side=side,
-                    description=f"{model.name} Signal Generated"
+                    description=f"Strategy Signal ({side})"
                 ))
-        return events
+            return events
+        except Exception as e:
+            print(f"Error executing signal script for '{self.name}': {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
     def to_dict(self) -> Dict[str, Any]:
+        # Ensure script content is fresh from disk before serializing
+        if os.path.exists(self.script_path):
+            with open(self.script_path, 'r') as f:
+                self.script_content = f.read()
+        
         return {
             "name": self.name,
             "feature_config": self.feature_config,
-            "models": [m.to_dict() for m in self.models]
+            "script_content": self.script_content
         }
 
-    def save(self, directory: str = "strategies"):
-        os.makedirs(directory, exist_ok=True)
-        file_path = os.path.join(directory, f"{self.name}.json")
-        with open(file_path, 'w') as f:
-            json.dump(self.to_dict(), f, indent=4)
+    def save(self):
+        os.makedirs(self.directory, exist_ok=True)
+        file_path = os.path.join(self.directory, f"{self.name}.strat")
+        
+        # Use pickle to bundle everything into one binary file
+        with open(file_path, 'wb') as f:
+            pickle.dump(self.to_dict(), f)
 
     @classmethod
     def load(cls, name: str, directory: str = "strategies") -> 'Strategy':
-        file_path = os.path.join(directory, f"{name}.json")
-        if not os.path.exists(file_path):
-            # Fallback to check if it exists in old "signal_models" directory just in case, or raise error
-            old_path = os.path.join("signal_models", f"{name}.json")
-            if os.path.exists(old_path):
-                file_path = old_path
-            else:
-                raise FileNotFoundError(f"Strategy {name} not found.")
+        file_path = os.path.join(directory, f"{name}.strat")
         
-        with open(file_path, 'r') as f:
-            data = json.load(f)
+        if not os.path.exists(file_path):
+            return cls(name=name, directory=directory)
+        
+        with open(file_path, 'rb') as f:
+            data = pickle.load(f)
             
-        models = []
-        for m_data in data.get("models", []):
-            m_type = m_data.get("type")
-            if m_type == "MLSignalModel":
-                m = MLSignalModel(m_data["name"], m_data.get("model_type", "RandomForest"))
-                m.features_to_use = m_data.get("features_to_use", [])
-                m.target_window = m_data.get("target_window", 5)
-                m.target_threshold = m_data.get("target_threshold", 0.01)
-                m.trained = m_data.get("trained", False)
-                # Load other ML specific params if needed
-            elif m_type == "DivergenceSignalModel":
-                m = DivergenceSignalModel(m_data["name"], m_data.get("indicator", "RSI_14"))
-                m.lookback = m_data.get("lookback", 20)
-                m.order = m_data.get("order", 5)
-            else:
-                # Fallback or generic model loader
-                print(f"Unknown signal model type: {m_type}")
-                continue
-            models.append(m)
-            
-        return cls(name=data["name"], models=models, feature_config=data.get("feature_config", {}))
+        return cls(
+            name=data["name"], 
+            feature_config=data.get("feature_config", {}),
+            script_content=data.get("script_content"),
+            directory=directory
+        )
 
     @staticmethod
     def list_available(directory: str = "strategies"):
         if not os.path.exists(directory):
-            # Check old directory too just in case during migration
-            if os.path.exists("signal_models"):
-                 return [f.replace(".json", "") for f in os.listdir("signal_models") if f.endswith(".json")]
             return []
-        return [f.replace(".json", "") for f in os.listdir(directory) if f.endswith(".json")]
+        names = []
+        for f in os.listdir(directory):
+            if f.endswith(".strat"):
+                strat_name = f.replace(".strat", "")
+                if strat_name != "Default":
+                    names.append(strat_name)
+        return sorted(names)

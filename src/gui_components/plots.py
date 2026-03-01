@@ -227,20 +227,20 @@ class UnifiedPlot(pg.PlotItem):
         
         y_min, y_max = np.inf, -np.inf
         
+        # We only want to scale to the PRICE (CandleOverlay).
+        # Other overlays should still update their internal state (like LOD or Volume ViewBox),
+        # but they shouldn't contribute to the global Y-min/max of this PlotItem.
         for o in self.overlays:
-            # Handle volume separately as it has its own ViewBox
             if isinstance(o, VolumeOverlay):
                 o.update_y_range(x_min, x_max)
                 continue
                 
-            # Handle LOD for candles
             if isinstance(o, CandleOverlay):
                 o.update_lod(x_min, x_max)
-
-            omin, omax = o.get_y_range(x_min, x_max)
-            if omin is not None:
-                y_min = min(y_min, omin)
-                y_max = max(y_max, omax)
+                omin, omax = o.get_y_range(x_min, x_max)
+                if omin is not None:
+                    y_min = min(y_min, omin)
+                    y_max = max(y_max, omax)
 
         if y_min != np.inf:
             pad = (y_max - y_min) * self.y_padding or 1.0

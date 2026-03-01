@@ -3,8 +3,10 @@ from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QLineEdit, QComboBox,
 class ControlBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setFixedHeight(50)
         self.setStyleSheet("background-color: #121212; border-bottom: 1px solid #333;")
         layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 5, 10, 5)
         
         self.ticker_input = QLineEdit("AAPL")
         self.ticker_input.setFixedWidth(80)
@@ -20,9 +22,6 @@ class ControlBar(QWidget):
         self.btn_random = QPushButton("Random")
         self.btn_random.setStyleSheet("background-color: #444; margin-left: 5px;")
         
-        self.btn_signals = QPushButton("Detect Signals")
-        self.btn_signals.setStyleSheet("background-color: #5500aa; color: white; font-weight: bold;")
-        
         layout.addWidget(QLabel("Ticker:"))
         layout.addWidget(self.ticker_input)
         layout.addWidget(self.ticker_history)
@@ -32,7 +31,6 @@ class ControlBar(QWidget):
         layout.addWidget(self.interval_combo)
         layout.addSpacing(15)
         layout.addWidget(self.btn_load)
-        layout.addWidget(self.btn_signals)
         layout.addStretch()
 
     def add_to_history(self, ticker):

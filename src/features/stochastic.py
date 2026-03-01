@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 import pandas as pd
-from .base import Feature, FeatureOutput, LineOutput
+from .base import Feature, FeatureOutput, LineOutput, FeatureResult
 
 class Stochastic(Feature):
     @property
@@ -36,7 +36,7 @@ class Stochastic(Feature):
             "color_d": "#ff00ff"
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         k_period = int(params.get("k_period", 14))
         d_period = int(params.get("d_period", 3))
         
@@ -51,7 +51,9 @@ class Stochastic(Feature):
         
         def clean(s): return s.where(pd.notnull(s), None).tolist()
         
-        return [
+        visuals = [
             LineOutput(name="%K", data=clean(k_percent), color=params.get("color_k"), width=1),
             LineOutput(name="%D", data=clean(d_percent), color=params.get("color_d"), width=1)
         ]
+        
+        return FeatureResult(visuals=visuals, data={"%K": k_percent, "%D": d_percent})

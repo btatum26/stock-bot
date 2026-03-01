@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 import pandas as pd
 import numpy as np
-from .base import Feature, FeatureOutput, LineOutput
+from .base import Feature, FeatureOutput, LineOutput, FeatureResult
 
 class AverageTrueRange(Feature):
     @property
@@ -23,7 +23,7 @@ class AverageTrueRange(Feature):
             "color": "#ff0000"
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         period = int(params.get("period", 14))
         
         high = df['High']
@@ -49,7 +49,7 @@ class AverageTrueRange(Feature):
         else:
             atr_scaled = atr
             
-        return [
+        visuals = [
             LineOutput(
                 name=f"ATR {period}",
                 data=atr_scaled.where(pd.notnull(atr_scaled), None).tolist(),
@@ -57,3 +57,4 @@ class AverageTrueRange(Feature):
                 width=2
             )
         ]
+        return FeatureResult(visuals=visuals, data={f"ATR_{period}": atr})

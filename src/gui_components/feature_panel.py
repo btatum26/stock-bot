@@ -1,14 +1,13 @@
-from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel, QGroupBox, QFormLayout, QLineEdit, QCheckBox, QScrollArea, QFrame)
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel, QGroupBox, QFormLayout, QLineEdit, QCheckBox, QScrollArea, QFrame)
 from PyQt6.QtCore import Qt
 
-class FeatureDock(QDockWidget):
+class FeaturePanel(QWidget):
     def __init__(self, available_features, parent=None):
-        super().__init__("Feature Analysis", parent)
-        self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        super().__init__(parent)
         self.setMinimumWidth(300)
         
-        main_widget = QWidget()
-        main_layout = QVBoxLayout(main_widget)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
         # 1. Strategy Management
         strat_group = QGroupBox("Strategy Control")
@@ -57,8 +56,6 @@ class FeatureDock(QDockWidget):
         
         self.scroll.setWidget(self.scroll_content)
         main_layout.addWidget(self.scroll)
-        
-        self.setWidget(main_widget)
 
     def create_feature_widget(self, feat_name, parameters, on_update, on_remove, initial_values=None):
         group = QGroupBox(feat_name)
