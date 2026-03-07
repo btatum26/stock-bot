@@ -6,7 +6,7 @@ import random
 import shutil
 import uuid
 from datetime import datetime
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter, QTabWidget, QScrollArea, QFrame)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter, QTabWidget, QScrollArea, QFrame, QHBoxLayout)
 from PyQt6.QtCore import Qt, QRectF, QThread, pyqtSignal
 import pyqtgraph as pg
 
@@ -27,6 +27,7 @@ from .gui_components.axes import DateAxis
 from .gui_components.controls import ControlBar
 from .gui_components.feature_panel import FeaturePanel
 from .gui_components.signals_panel import SignalsPanel
+from .gui_components.training_panel import TrainingPanel
 from .gui_components.plots import UnifiedPlot, CandleOverlay, VolumeOverlay, LineOverlay, LevelOverlay
 
 class TrainingThread(QThread):
@@ -34,25 +35,102 @@ class TrainingThread(QThread):
     error = pyqtSignal(str)
     log = pyqtSignal(str)
 
-    def __init__(self, script_instance, df, feature_data, settings):
+    def __init__(self, script_instance, engine, active_features, settings, current_ticker, current_interval):
         super().__init__()
         self.script_instance = script_instance
-        self.df = df
-        self.feature_data = feature_data
+        self.engine = engine
+        self.active_features = active_features
         self.settings = settings
+        self.current_ticker = current_ticker
+        self.current_interval = current_interval
 
     def run(self):
         try:
-            self.log.emit(f"Starting training via script '{self.script_instance.__class__.__name__}'...")
+            self.log.emit(f"Starting training session...")
             
+            # 1. Resolve Tickers
+            tickers = []
+            mode = self.settings.get("ticker_mode")
+            if mode == "Current Ticker":
+                tickers = [self.current_ticker]
+            elif mode == "Custom Basket":
+                raw = self.settings.get("ticker_list", "")
+                tickers = [t.strip().upper() for t in raw.split(",") if t.strip()]
+            elif mode == "Random Selection":
+                count = self.settings.get("random_ticker_count", 5)
+                all_available = self.engine.db.get_all_tickers()
+                if len(all_available) > count:
+                    import random
+                    tickers = random.sample(all_available, count)
+                else:
+                    tickers = all_available
+            
+            if not tickers:
+                raise Exception("No tickers selected for training.")
+
+            # 2. Collect and Prepare Data
+            combined_df_list = []
+            combined_features_list = []
+            
+            for ticker in tickers:
+                self.log.emit(f"Processing {ticker}...")
+                df = self.engine.db.get_data(ticker, self.current_interval)
+                if df.empty:
+                    self.log.emit(f"  Warning: No data for {ticker}. Skipping.")
+                    continue
+                
+                # Apply Range Mode (Slicing)
+                ranges = []
+                if self.settings.get("range_mode") == "Random Slices":
+                    num_slices = self.settings.get("slice_count", 5)
+                    slice_size = self.settings.get("slice_size", 500)
+                    if len(df) > slice_size:
+                        import random
+                        for _ in range(num_slices):
+                            start_idx = random.randint(0, len(df) - slice_size)
+                            ranges.append(df.iloc[start_idx : start_idx + slice_size])
+                    else:
+                        ranges.append(df)
+                else:
+                    ranges.append(df)
+
+                for sub_df in ranges:
+                    # Compute features for this slice
+                    feat_data = {}
+                    for feat_name, data in self.active_features.items():
+                        feat = data["instance"]
+                        params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
+                                  for k, w in data["inputs"].items()}
+                        res = feat.compute(sub_df, params)
+                        if isinstance(res, FeatureResult):
+                            feat_data.update(res.data)
+                        elif hasattr(res, 'data'):
+                            feat_data.update(res.data)
+                    
+                    combined_df_list.append(sub_df)
+                    combined_features_list.append(pd.DataFrame(feat_data, index=sub_df.index))
+
+            if not combined_df_list:
+                raise Exception("Failed to collect any data for training.")
+
+            # 3. Concatenate all data
+            final_df = pd.concat(combined_df_list)
+            # For features, we can't easily concat if keys differ, but they should be consistent across tickers
+            final_features_df = pd.concat(combined_features_list)
+            
+            # Convert back to dict for the script
+            final_feature_dict = {col: final_features_df[col] for col in final_features_df.columns}
+
+            # 4. Train
             if not hasattr(self.script_instance, 'train'):
                 raise Exception("The strategy script does not have a 'train' method implemented.")
                 
             model, metrics = self.script_instance.train(
-                self.df, 
-                self.feature_data, 
+                final_df, 
+                final_feature_dict, 
                 self.settings
             )
+            
             self.log.emit("Training complete.")
             self.finished.emit(model, metrics)
         except Exception as e:
@@ -88,11 +166,22 @@ class ChartWindow(QMainWindow):
     def _init_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # 1. Controls
+        # 1. Main Horizontal Splitter (Left side Plot/Controls vs Right side Sidebar)
+        self.main_h_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_h_splitter.setHandleWidth(6)
+        main_layout.addWidget(self.main_h_splitter)
+        
+        # --- Left Side Container ---
+        self.left_side = QWidget()
+        left_layout = QVBoxLayout(self.left_side)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        
+        # Header Controls
         self.controls = ControlBar(self)
         self.controls.ticker_input.returnPressed.connect(self.load_chart)
         self.controls.ticker_history.currentIndexChanged.connect(self.load_from_history)
@@ -106,21 +195,12 @@ class ChartWindow(QMainWindow):
         self.controls.btn_rename_strategy.clicked.connect(self.rename_strategy)
         self.controls.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
         
-        main_layout.addWidget(self.controls)
+        left_layout.addWidget(self.controls)
         
-        # 2. Main Horizontal Splitter (Plots vs Sidebar)
-        self.main_h_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.main_h_splitter.setHandleWidth(6)
-        main_layout.addWidget(self.main_h_splitter)
-        
-        # --- Left Side: Plot Area ---
-        self.plot_container = QWidget()
-        plot_layout = QVBoxLayout(self.plot_container)
-        plot_layout.setContentsMargins(0, 0, 0, 0)
-        
+        # Plot Area Splitter
         self.plot_splitter = QSplitter(Qt.Orientation.Vertical)
         self.plot_splitter.setHandleWidth(6)
-        plot_layout.addWidget(self.plot_splitter)
+        left_layout.addWidget(self.plot_splitter)
         
         # Container for main plot
         self.main_plot_widget = pg.GraphicsLayoutWidget()
@@ -142,29 +222,38 @@ class ChartWindow(QMainWindow):
         self.main_plot.getAxis('bottom').setPen('#444')
         
         self._setup_crosshair()
-        self.main_h_splitter.addWidget(self.plot_container)
+        self.main_h_splitter.addWidget(self.left_side)
         
-        # --- Right Side: Sidebar Tabs ---
+        # --- Right Side: Sidebar Tabs (Full Height) ---
         self.sidebar_tabs = QTabWidget()
         self.sidebar_tabs.setFixedWidth(350)
         
-        # Features Tab
+        # Features Tab (Wrapped in scroll area)
         self.feature_panel = FeaturePanel(self.available_features, self)
         self.feature_panel.btn_add_feat.clicked.connect(self.add_feature_ui)
-        self.sidebar_tabs.addTab(self.feature_panel, "Features")
         
-        # Signals Tab
+        feature_scroll = QScrollArea()
+        feature_scroll.setWidgetResizable(True)
+        feature_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        feature_scroll.setWidget(self.feature_panel)
+        self.sidebar_tabs.addTab(feature_scroll, "Features")
+        
+        # Training Tab
+        self.training_panel = TrainingPanel(self)
+        self.training_panel.train_requested.connect(self.train_model)
+        self.sidebar_tabs.addTab(self.training_panel, "Training")
+        
+        # Models Tab (formerly Signals)
         self.signals_panel = SignalsPanel(self)
         self.signals_panel.generate_requested.connect(self.preview_signals)
-        self.signals_panel.train_requested.connect(self.train_model)
         self.signals_panel.set_active_requested.connect(self.set_active_model)
         self.signals_panel.delete_model_requested.connect(self.delete_model)
         self.signals_panel.rename_model_requested.connect(self.rename_model)
-        self.sidebar_tabs.addTab(self.signals_panel, "Signals")
+        self.sidebar_tabs.addTab(self.signals_panel, "Models")
         
         self.main_h_splitter.addWidget(self.sidebar_tabs)
         
-        # Set stretch factors: Plot Area (1) gets all extra space, Sidebar (0) stays fixed or minimal
+        # Set stretch factors: Plot Area (0) gets all extra space
         self.main_h_splitter.setStretchFactor(0, 1)
         self.main_h_splitter.setStretchFactor(1, 0)
         
@@ -525,14 +614,7 @@ class ChartWindow(QMainWindow):
             QMessageBox.warning(self, "Train", "Load data first.")
             return
             
-        # 1. Compute all features required for training based on active GUI features
-        all_feature_data = {}
-        features_to_use = []
-        for feat_name, data in self.active_features.items():
-            features_to_use.append(feat_name)
-            if "raw_data" in data:
-                all_feature_data.update(data["raw_data"])
-                
+        features_to_use = list(self.active_features.keys())
         if not features_to_use:
             QMessageBox.warning(self, "Train", "Add at least one feature (e.g. RSI) to train the model on.")
             return
@@ -542,24 +624,31 @@ class ChartWindow(QMainWindow):
             QMessageBox.warning(self, "Train", "Could not load the strategy script.")
             return
             
-        # Optional: Set features_to_use to the script if it wants to know what was on the GUI
         if hasattr(script_instance, 'features_to_use'):
             script_instance.features_to_use = features_to_use
         
-        self.signals_panel.btn_train.setEnabled(False)
-        self.signals_panel.progress_bar.setValue(50) # Indeterminate-ish
+        self.training_panel.btn_train.setEnabled(False)
+        self.training_panel.progress_bar.setValue(10)
+        self.training_panel.log("Initializing multi-ticker training thread...")
         
-        # Start Thread
-        self.training_thread = TrainingThread(script_instance, self.df, all_feature_data, settings)
+        # Start Thread with new signature
+        self.training_thread = TrainingThread(
+            script_instance, 
+            self.engine, 
+            self.active_features, 
+            settings,
+            self.controls.ticker_input.text().upper(),
+            self.controls.interval_combo.currentText()
+        )
         self.training_thread.finished.connect(lambda w, m: self._on_training_finished(w, m, settings, features_to_use))
         self.training_thread.error.connect(self._on_training_error)
-        self.training_thread.log.connect(self.signals_panel.log)
+        self.training_thread.log.connect(self.training_panel.log)
         self.training_thread.start()
 
     def _on_training_finished(self, model_weights, metrics, settings, features_to_use):
-        self.signals_panel.btn_train.setEnabled(True)
-        self.signals_panel.progress_bar.setValue(100)
-        self.signals_panel.log(f"Accuracy: {metrics.get('accuracy',0):.2%}, Precision: {metrics.get('precision',0):.2%}")
+        self.training_panel.btn_train.setEnabled(True)
+        self.training_panel.progress_bar.setValue(100)
+        self.training_panel.log(f"Final Accuracy: {metrics.get('accuracy',0):.2%}, Samples: {metrics.get('samples', 0)}")
         
         # Save to strategy
         model_id = str(uuid.uuid4())[:8]
@@ -569,7 +658,8 @@ class ChartWindow(QMainWindow):
             "comment": f"{settings.get('model_type')} ({metrics.get('accuracy',0):.0%})",
             "settings": settings,
             "training_scope": {
-                "ticker": self.controls.ticker_input.text().upper(),
+                "mode": settings.get("ticker_mode"),
+                "tickers": settings.get("ticker_list") if settings.get("ticker_mode") == "Custom Basket" else "Random" if settings.get("ticker_mode") == "Random Selection" else self.controls.ticker_input.text().upper(),
                 "interval": self.controls.interval_combo.currentText(),
                 "features": features_to_use,
                 "samples": metrics.get('samples', 0)
@@ -585,9 +675,9 @@ class ChartWindow(QMainWindow):
         self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
 
     def _on_training_error(self, err_msg):
-        self.signals_panel.btn_train.setEnabled(True)
-        self.signals_panel.progress_bar.setValue(0)
-        self.signals_panel.log(f"ERROR: {err_msg}")
+        self.training_panel.btn_train.setEnabled(True)
+        self.training_panel.progress_bar.setValue(0)
+        self.training_panel.log(f"ERROR: {err_msg}")
         QMessageBox.critical(self, "Training Error", err_msg)
 
     def preview_signals(self):

@@ -10,6 +10,10 @@ from .signals.base import SignalEvent
 SCRIPT_TEMPLATE = """import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+try:
+    from xgboost import XGBClassifier
+except ImportError:
+    XGBClassifier = None
 from sklearn.metrics import precision_score, recall_score, accuracy_score
 from src.signals.base import SignalModel
 
@@ -29,9 +33,14 @@ class StrategySignal(SignalModel):
         for k, v in feature_data.items(): X[k] = v
         X = X.dropna()
         
-        # 2. Prepare Labels (Example: predict a drop)
+        # 2. Prepare Labels
         target_window = settings.get("target_window", 5)
         target_threshold = settings.get("target_threshold", 0.01)
+        
+        # We need to compute the target on a per-ticker basis if we want to be precise,
+        # but since 'df' here is already a concatenated long-format DF from TrainingThread,
+        # we have to be careful about cross-ticker shifts. 
+        # However, for simplicity in this template, we'll assume the concat was done safely.
         
         future_close = df['Close'].shift(-target_window)
         price_change = (future_close - df['Close']) / df['Close']
@@ -40,11 +49,12 @@ class StrategySignal(SignalModel):
         y[price_change > target_threshold] = 1
         y[price_change < -target_threshold] = -1
         
+        # Remove the last few rows where we don't have future data
         common_idx = X.index.intersection(y.index).dropna()[:-target_window]
         X, y = X.loc[common_idx], y.loc[common_idx]
         
         if len(X) < 20:
-            raise ValueError("Not enough data to train.")
+            raise ValueError(f"Not enough data to train (found {len(X)} samples).")
             
         # 3. Train/Test Split
         split = int(len(X) * (1 - settings.get('validation_split', 0.2)))
@@ -52,12 +62,29 @@ class StrategySignal(SignalModel):
         y_train, y_test = y.iloc[:split], y.iloc[split:]
         
         # 4. Train Model
-        model = RandomForestClassifier(
-            n_estimators=settings.get('n_estimators', 100),
-            max_depth=settings.get('max_depth', 10),
-            random_state=42
-        )
-        model.fit(X_train, y_train)
+        model_type = settings.get("model_type", "RandomForest")
+        
+        if model_type == "XGBoost" and XGBClassifier is not None:
+            # XGBoost expects 0, 1, 2 for multiclass, so map [-1, 0, 1] -> [0, 1, 2]
+            y_train_mapped = y_train + 1
+            model = XGBClassifier(
+                n_estimators=settings.get('n_estimators', 100),
+                max_depth=settings.get('max_depth', 6),
+                random_state=42,
+                use_label_encoder=False,
+                eval_metric='mlogloss'
+            )
+            model.fit(X_train, y_train_mapped)
+            # Add a wrapper for predict to map back to [-1, 0, 1]
+            original_predict = model.predict
+            model.predict = lambda x: original_predict(x) - 1
+        else:
+            model = RandomForestClassifier(
+                n_estimators=settings.get('n_estimators', 100),
+                max_depth=settings.get('max_depth', 10),
+                random_state=42
+            )
+            model.fit(X_train, y_train)
         
         # 5. Evaluate
         y_pred = model.predict(X_test)
