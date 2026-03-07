@@ -34,61 +34,59 @@ Ensure you have `uv` installed on your system.
 
 ## Usage
 
-The application is controlled via a CLI interface with three primary modes:
+The application is controlled via a unified CLI and a desktop GUI.
 
-### 1. Sync Data
-Download historical data for a specific ticker and save it to the local database.
+### Desktop GUI
+The full interactive experience with charts, indicators, and strategy training.
 ```bash
-uv run python stock_bot.py --mode sync --ticker AAPL --interval 4h --period 1y
+uv run python run_gui.py
 ```
 
-### 2. Snapshot (Bulk Sync)
-The snapshot mode is designed for building a comprehensive local database for the Russell 1000 or top market companies.
-- **Source**: Prioritizes `data/tickers.txt` if available; otherwise, it fetches from S&P 500, S&P 400, and NASDAQ 100 sources.
-- **Decade History**: Automatically pulls the last 10 years for weekly/daily bars.
-- **Multi-Interval**: Syncs `1w, 1d, 4h, 1h, 30m, 15m` intervals for every ticker.
-- **Smart Skip**: Checks the database and skips any ticker/interval that is already up to date (within the last 6 months).
-- **Auto-Period Scaling**: Respects `yfinance` limits (e.g., 2 years for 1h/4h, 60 days for 15m/30m).
+### Unified CLI (`CLI.py`)
 
+All command-line operations are now unified under `CLI.py`.
+
+#### 1. Data Synchronization
+Sync historical data for a specific ticker to the local database.
 ```bash
-uv run python stock_bot.py --mode snapshot
+uv run python CLI.py --mode sync --ticker AAPL --interval 4h --period 1y
 ```
 
-### 3. Ticker Extraction
-If you have an iShares Russell 1000 ETF holdings Excel file (`.xls`), you can extract the exact tickers for the snapshot:
-1. Place the file at `data/iShares-Russell-1000-ETF_fund.xls`.
-2. Run the extraction script:
-   ```bash
-   uv run python extract_tickers.py
-   ```
-3. This creates `data/tickers.txt`, which the snapshot mode will use automatically.
-
-### 4. Backtest
-Run a strategy against the data stored in the local database.
+#### 2. Bulk Data Collection (Snapshot)
+Build a comprehensive local database for the top 1000 market companies.
 ```bash
-uv run python stock_bot.py --mode backtest --ticker AAPL --interval 4h
+uv run python CLI.py --mode bulk_sync --period 10y
 ```
 
-### 3. Live Simulation
-Run a strategy against real-time data updates.
+#### 3. Maintenance (Reset & Clean)
+Clear data for a specific ticker or remove duplicates from the database.
 ```bash
-uv run python stock_bot.py --mode live --ticker AAPL --interval 1h
+# Reset a specific ticker/interval
+uv run python CLI.py --mode reset --ticker AAPL --interval 4h
+
+# Remove duplicate records across the entire DB
+uv run python CLI.py --mode clean
 ```
 
-## Strategy Development
+#### 4. Backtesting & Live Simulation
+Run the sample SMA Crossover strategy against historical or real-time data.
+```bash
+# Backtest
+uv run python CLI.py --mode backtest --ticker AAPL --interval 4h
 
-To create a new strategy, inherit from the `Strategy` base class in `src/engine.py` and implement the `on_bar` method:
-
-```python
-class MyStrategy(Strategy):
-    def on_bar(self, ticker, bar, history):
-        # Your logic here
-        pass
+# Live Simulation
+uv run python CLI.py --mode live --ticker AAPL --interval 1h
 ```
 
 ## Project Structure
 
-- `src/database.py`: Handles SQLite schema and data persistence.
-- `src/fetcher.py`: Manages yfinance API calls and data resampling.
-- `src/engine.py`: Contains the core logic for backtesting and live execution.
-- `stock_bot.py`: CLI entry point and sample strategy implementation.
+- `run_gui.py`: Main entry point for the desktop application.
+- `CLI.py`: Unified CLI for data management, backtesting, and maintenance.
+- `utils/`: Core utility logic (imported by CLI.py).
+  - `clean_db.py`: Logic for removing duplicates.
+  - `reset_ticker.py`: Logic for clearing specific ticker data.
+- `src/`: Core framework logic.
+  - `engine.py`: Backtesting and live execution engines.
+  - `database.py`: SQLite schema and persistence layer.
+  - `snapshot.py`: Bulk data collection logic.
+- `data/`: Storage for the SQLite database and internal strategies.

@@ -4,35 +4,87 @@ import pickle
 import importlib.util
 from typing import Dict, List, Any, Optional
 import pandas as pd
+from datetime import datetime
 from .signals.base import SignalEvent
 
 SCRIPT_TEMPLATE = """import pandas as pd
 import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import precision_score, recall_score, accuracy_score
 from src.signals.base import SignalModel
 
 class StrategySignal(SignalModel):
+    def __init__(self):
+        super().__init__()
+        self.active_model_id = None
+        self.model_instances = {} # UUID -> {weights, metrics, settings, ...}
+
+    def train(self, df: pd.DataFrame, feature_data: dict, settings: dict):
+        \"\"\"
+        Self-contained training logic.
+        Returns: (trained_model_object, metrics_dict)
+        \"\"\"
+        # 1. Prepare Data
+        X = pd.DataFrame(index=df.index)
+        for k, v in feature_data.items(): X[k] = v
+        X = X.dropna()
+        
+        # 2. Prepare Labels (Example: predict a drop)
+        target_window = settings.get("target_window", 5)
+        target_threshold = settings.get("target_threshold", 0.01)
+        
+        future_close = df['Close'].shift(-target_window)
+        price_change = (future_close - df['Close']) / df['Close']
+        
+        y = pd.Series(0, index=df.index)
+        y[price_change > target_threshold] = 1
+        y[price_change < -target_threshold] = -1
+        
+        common_idx = X.index.intersection(y.index).dropna()[:-target_window]
+        X, y = X.loc[common_idx], y.loc[common_idx]
+        
+        if len(X) < 20:
+            raise ValueError("Not enough data to train.")
+            
+        # 3. Train/Test Split
+        split = int(len(X) * (1 - settings.get('validation_split', 0.2)))
+        X_train, X_test = X.iloc[:split], X.iloc[split:]
+        y_train, y_test = y.iloc[:split], y.iloc[split:]
+        
+        # 4. Train Model
+        model = RandomForestClassifier(
+            n_estimators=settings.get('n_estimators', 100),
+            max_depth=settings.get('max_depth', 10),
+            random_state=42
+        )
+        model.fit(X_train, y_train)
+        
+        # 5. Evaluate
+        y_pred = model.predict(X_test)
+        metrics = {
+            "accuracy": float(accuracy_score(y_test, y_pred)),
+            "precision": float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
+            "recall": float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
+            "samples": len(X)
+        }
+        
+        return model, metrics
+
     def generate_signals(self, df: pd.DataFrame, feature_data: dict) -> pd.Series:
-        \"\"\"
-        df: DataFrame with OHLCV data ('Open', 'High', 'Low', 'Close', 'Volume')
-        feature_data: Dict of feature results (e.g. {'RSI_14': Series, ...})
-        \"\"\"
         signals = pd.Series(0, index=df.index)
         
-        # Example using OHLCV:
-        # close = df['Close']
-        # volume = df['Volume']
-        
-        # Example: 
-        # 1 = Buy (Green Triangle Up)
-        # -1 = Sell (Red Triangle Down)
-        # 2 = Neutral (Yellow Circle)
-        
-        # if 'RSI_14' in feature_data:
-        #     rsi = feature_data['RSI_14']
-        #     signals[(rsi < 30)] = 1
-        #     signals[(rsi > 70)] = -1
-        #     signals[(rsi >= 45) & (rsi <= 55)] = 2
+        # --- Using the active trained model ---
+        if self.active_model_id and self.active_model_id in self.model_instances:
+            model = self.model_instances[self.active_model_id]['weights']
             
+            X = pd.DataFrame(index=df.index)
+            for k, v in feature_data.items(): X[k] = v
+            X_clean = X.dropna()
+            
+            if not X_clean.empty:
+                preds = model.predict(X_clean)
+                signals.loc[X_clean.index] = preds
+                
         return signals
 """
 
@@ -41,60 +93,86 @@ class Strategy:
     Represents a trading strategy which consists of:
     1. A set of features (configuration).
     2. A Python script file that defines signal generation logic.
+    3. Trained ML model instances and metadata.
     
-    Both are pickled into a single .strat file.
+    Everything is pickled into a single .strat file.
     """
-    def __init__(self, name: str, feature_config: Dict[str, Any] = None, script_content: str = None, directory: str = "strategies"):
+    def __init__(self, name: str, 
+                 feature_config: Dict[str, Any] = None, 
+                 script_content: str = None, 
+                 model_instances: Dict[str, Any] = None,
+                 model_definitions: Dict[str, Any] = None,
+                 active_model_id: str = None,
+                 metadata: Dict[str, Any] = None,
+                 directory: str = "strategies"):
         self.name = name
         self.feature_config = feature_config or {} 
         self.script_content = script_content
+        self.model_instances = model_instances or {} # UUID -> {weights, timestamp, comment, settings, training_scope, metrics}
+        self.model_definitions = model_definitions or {
+            "RandomForest": {"n_estimators": 100, "max_depth": 10},
+            "XGBoost": {"n_estimators": 100, "max_depth": 6} 
+        }
+        self.active_model_id = active_model_id
+        self.metadata = metadata or {
+            "author": "System",
+            "version": "1.0",
+            "creation_date": datetime.now().isoformat()
+        }
         self.directory = directory
         self._ensure_script_exists()
 
     @property
     def script_path(self):
-        # Working script path (extracted from pickle for execution/editing)
         return os.path.join(self.directory, "working_scripts", f"{self.name}.py")
 
     def _ensure_script_exists(self):
         os.makedirs(os.path.dirname(self.script_path), exist_ok=True)
-        
-        # If we have content (from a load), we write it to the working file ONLY if it doesn't exist
         if self.script_content is not None and not os.path.exists(self.script_path):
             with open(self.script_path, 'w') as f:
                 f.write(self.script_content)
-        # If no content and no file, use template
         elif not os.path.exists(self.script_path):
             with open(self.script_path, 'w') as f:
                 f.write(SCRIPT_TEMPLATE)
 
-    def generate_signals(self, df: pd.DataFrame, feature_data: Dict[str, pd.Series]) -> List[SignalEvent]:
+    def get_script_instance(self) -> Optional[Any]:
         """
-        Dynamically loads the StrategySignal class from the script file and executes it.
-        Force reloads the module to pick up changes from VS Code.
+        Dynamically loads and instantiates the StrategySignal class from the script.
         """
         if not os.path.exists(self.script_path):
-            return []
+            return None
 
         try:
-            # Dynamic Import with unique name to avoid caching issues
             module_name = f"strategy_script_{self.name}"
             spec = importlib.util.spec_from_file_location(module_name, self.script_path)
             module = importlib.util.module_from_spec(spec)
             
-            # Remove from sys.modules if it exists to force a fresh load
             import sys
             if module_name in sys.modules:
                 del sys.modules[module_name]
                 
             spec.loader.exec_module(module)
             
-            if not hasattr(module, 'StrategySignal'):
-                print(f"Error in '{self.script_path}': Class 'StrategySignal' not found.")
+            if hasattr(module, 'StrategySignal'):
+                return module.StrategySignal()
+        except Exception as e:
+            print(f"Error loading script instance: {e}")
+        return None
+
+    def generate_signals(self, df: pd.DataFrame, feature_data: Dict[str, pd.Series]) -> List[SignalEvent]:
+        if not os.path.exists(self.script_path):
+            return []
+
+        try:
+            model_instance = self.get_script_instance()
+            if not model_instance:
                 return []
             
-            model = module.StrategySignal()
-            signals = model.generate_signals(df, feature_data)
+            # Pass the raw instances directly to the script
+            model_instance.model_instances = self.model_instances
+            model_instance.active_model_id = self.active_model_id
+            
+            signals = model_instance.generate_signals(df, feature_data)
             
             # Convert Series to Events
             events = []
@@ -122,7 +200,6 @@ class Strategy:
             return []
 
     def to_dict(self) -> Dict[str, Any]:
-        # Ensure script content is fresh from disk before serializing
         if os.path.exists(self.script_path):
             with open(self.script_path, 'r') as f:
                 self.script_content = f.read()
@@ -130,31 +207,34 @@ class Strategy:
         return {
             "name": self.name,
             "feature_config": self.feature_config,
-            "script_content": self.script_content
+            "script_content": self.script_content,
+            "model_instances": self.model_instances,
+            "model_definitions": self.model_definitions,
+            "active_model_id": self.active_model_id,
+            "metadata": self.metadata
         }
 
     def save(self):
         os.makedirs(self.directory, exist_ok=True)
         file_path = os.path.join(self.directory, f"{self.name}.strat")
-        
-        # Use pickle to bundle everything into one binary file
         with open(file_path, 'wb') as f:
             pickle.dump(self.to_dict(), f)
 
     @classmethod
     def load(cls, name: str, directory: str = "strategies") -> 'Strategy':
         file_path = os.path.join(directory, f"{name}.strat")
-        
         if not os.path.exists(file_path):
             return cls(name=name, directory=directory)
-        
         with open(file_path, 'rb') as f:
             data = pickle.load(f)
-            
         return cls(
             name=data["name"], 
             feature_config=data.get("feature_config", {}),
             script_content=data.get("script_content"),
+            model_instances=data.get("model_instances", {}),
+            model_definitions=data.get("model_definitions", {}),
+            active_model_id=data.get("active_model_id"),
+            metadata=data.get("metadata"),
             directory=directory
         )
 

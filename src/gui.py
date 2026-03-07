@@ -3,8 +3,11 @@ import os
 import pandas as pd
 import numpy as np
 import random
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter, QTabWidget)
-from PyQt6.QtCore import Qt, QRectF
+import shutil
+import uuid
+from datetime import datetime
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter, QTabWidget, QScrollArea, QFrame)
+from PyQt6.QtCore import Qt, QRectF, QThread, pyqtSignal
 import pyqtgraph as pg
 
 from .database import Database
@@ -25,6 +28,37 @@ from .gui_components.controls import ControlBar
 from .gui_components.feature_panel import FeaturePanel
 from .gui_components.signals_panel import SignalsPanel
 from .gui_components.plots import UnifiedPlot, CandleOverlay, VolumeOverlay, LineOverlay, LevelOverlay
+
+class TrainingThread(QThread):
+    finished = pyqtSignal(object, object) # model, metrics
+    error = pyqtSignal(str)
+    log = pyqtSignal(str)
+
+    def __init__(self, script_instance, df, feature_data, settings):
+        super().__init__()
+        self.script_instance = script_instance
+        self.df = df
+        self.feature_data = feature_data
+        self.settings = settings
+
+    def run(self):
+        try:
+            self.log.emit(f"Starting training via script '{self.script_instance.__class__.__name__}'...")
+            
+            if not hasattr(self.script_instance, 'train'):
+                raise Exception("The strategy script does not have a 'train' method implemented.")
+                
+            model, metrics = self.script_instance.train(
+                self.df, 
+                self.feature_data, 
+                self.settings
+            )
+            self.log.emit("Training complete.")
+            self.finished.emit(model, metrics)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error.emit(str(e))
 
 class ChartWindow(QMainWindow):
     def __init__(self):
@@ -62,8 +96,16 @@ class ChartWindow(QMainWindow):
         self.controls = ControlBar(self)
         self.controls.ticker_input.returnPressed.connect(self.load_chart)
         self.controls.ticker_history.currentIndexChanged.connect(self.load_from_history)
+        self.controls.interval_combo.currentIndexChanged.connect(self.load_chart)
         self.controls.btn_load.clicked.connect(self.load_chart)
         self.controls.btn_random.clicked.connect(self.load_random)
+        
+        # Connect Strategy Controls in Header
+        self.controls.btn_save_strategy.clicked.connect(self.save_strategy)
+        self.controls.btn_load_strategy.clicked.connect(self.load_strategy)
+        self.controls.btn_rename_strategy.clicked.connect(self.rename_strategy)
+        self.controls.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
+        
         main_layout.addWidget(self.controls)
         
         # 2. Main Horizontal Splitter (Plots vs Sidebar)
@@ -109,14 +151,15 @@ class ChartWindow(QMainWindow):
         # Features Tab
         self.feature_panel = FeaturePanel(self.available_features, self)
         self.feature_panel.btn_add_feat.clicked.connect(self.add_feature_ui)
-        self.feature_panel.btn_save_strategy.clicked.connect(self.save_strategy)
-        self.feature_panel.btn_load_strategy.clicked.connect(self.load_strategy)
-        self.feature_panel.btn_rename_strategy.clicked.connect(self.rename_strategy)
         self.sidebar_tabs.addTab(self.feature_panel, "Features")
         
         # Signals Tab
         self.signals_panel = SignalsPanel(self)
-        self.signals_panel.btn_generate.clicked.connect(self.preview_signals)
+        self.signals_panel.generate_requested.connect(self.preview_signals)
+        self.signals_panel.train_requested.connect(self.train_model)
+        self.signals_panel.set_active_requested.connect(self.set_active_model)
+        self.signals_panel.delete_model_requested.connect(self.delete_model)
+        self.signals_panel.rename_model_requested.connect(self.rename_model)
         self.sidebar_tabs.addTab(self.signals_panel, "Signals")
         
         self.main_h_splitter.addWidget(self.sidebar_tabs)
@@ -196,7 +239,7 @@ class ChartWindow(QMainWindow):
         feature = self.available_features[feat_name]
         input_widgets, group_widget = self.feature_panel.create_feature_widget(
             feat_name, feature.parameters, 
-            lambda: self.update_feature(feat_name),
+            lambda: self.update_and_save(feat_name),
             self.remove_feature,
             initial_values=initial_values
         )
@@ -237,6 +280,12 @@ class ChartWindow(QMainWindow):
         self.update_feature(feat_name)
         if reorganize_needed:
             self._reorganize_subplots()
+            
+        self._autosave_strategy()
+
+    def update_and_save(self, feat_name):
+        self.update_feature(feat_name)
+        self._autosave_strategy()
 
     def update_feature(self, feat_name):
         if self.df is None or self.df.empty: return
@@ -306,6 +355,7 @@ class ChartWindow(QMainWindow):
                     self._reorganize_subplots()
             del self.active_features[feat_name]
         widget.deleteLater()
+        self._autosave_strategy()
 
     def _reorganize_subplots(self):
         """Manages splitter sizes based on the 20%/40% rules."""
@@ -334,7 +384,8 @@ class ChartWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, "Rename Strategy", "Enter new name:", text=self.strategy.name)
         if ok and name:
             self.strategy.name = name
-            self.feature_panel.lbl_strategy_name.setText(f"Strategy: {name}")
+            self.controls.lbl_strategy_name.setText(f"Strategy: {name}")
+            self._autosave_strategy()
 
     def _sync_active_strategy(self):
         """Syncs GUI feature state into self.strategy object."""
@@ -348,6 +399,14 @@ class ChartWindow(QMainWindow):
             feature_config[feat_name] = params
         self.strategy.feature_config = feature_config
 
+    def _autosave_strategy(self):
+        """Saves current state without prompting."""
+        self._sync_active_strategy()
+        try:
+            self.strategy.save()
+        except Exception as e:
+            print(f"Autosave failed: {e}")
+
     def save_strategy(self):
         name, ok = QInputDialog.getText(self, "Save Strategy", "Enter a name for this strategy:", text=self.strategy.name)
         if not ok or not name: return
@@ -357,13 +416,12 @@ class ChartWindow(QMainWindow):
         self.strategy.name = name
         self.strategy.directory = "strategies" # Move from internal to main if it was internal
         self._sync_active_strategy()
-        self.feature_panel.lbl_strategy_name.setText(f"Strategy: {name}")
+        self.controls.lbl_strategy_name.setText(f"Strategy: {name}")
         
         # Ensure the physical .py file follows the name change
         new_script_path = self.strategy.script_path
         if os.path.exists(old_script_path) and old_script_path != new_script_path:
             try:
-                import shutil
                 os.makedirs(os.path.dirname(new_script_path), exist_ok=True)
                 shutil.copy(old_script_path, new_script_path)
             except Exception as e:
@@ -389,7 +447,6 @@ class ChartWindow(QMainWindow):
 
     def _cleanup_working_dir(self, working_dir, strat_dir):
         if os.path.exists(working_dir):
-            import shutil
             for f in os.listdir(working_dir):
                 if f.endswith(".py"):
                     name = f[:-3]
@@ -422,17 +479,116 @@ class ChartWindow(QMainWindow):
 
             # 2. Load strategy
             self.strategy = Strategy.load(name)
-            self.feature_panel.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
+            self.controls.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
             
             # 3. Add features from config
             for feat_name, params in self.strategy.feature_config.items():
                 if feat_name in self.available_features:
                     self._add_feature_by_name(feat_name, initial_values=params)
+            
+            # 4. Refresh models list
+            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
                 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load strategy: {e}")
             import traceback
             traceback.print_exc()
+
+    def set_active_model(self, model_id):
+        self.strategy.active_model_id = model_id
+        self.strategy.save()
+        self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+
+    def rename_model(self, model_id):
+        if model_id not in self.strategy.model_instances: return
+        info = self.strategy.model_instances[model_id]
+        current_name = info.get('comment', '')
+        name, ok = QInputDialog.getText(self, "Rename Model", "Enter new name/comment:", text=current_name)
+        if ok:
+            info['comment'] = name
+            self.strategy.save()
+            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+
+    def delete_model(self, model_id):
+        if model_id in self.strategy.model_instances:
+            reply = QMessageBox.question(self, "Delete Model", "Are you sure you want to delete this trained model?",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                self.strategy.model_instances.pop(model_id)
+                if self.strategy.active_model_id == model_id:
+                    self.strategy.active_model_id = None
+                self.strategy.save()
+                self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+
+    def train_model(self, settings):
+        if self.df is None or self.df.empty:
+            QMessageBox.warning(self, "Train", "Load data first.")
+            return
+            
+        # 1. Compute all features required for training based on active GUI features
+        all_feature_data = {}
+        features_to_use = []
+        for feat_name, data in self.active_features.items():
+            features_to_use.append(feat_name)
+            if "raw_data" in data:
+                all_feature_data.update(data["raw_data"])
+                
+        if not features_to_use:
+            QMessageBox.warning(self, "Train", "Add at least one feature (e.g. RSI) to train the model on.")
+            return
+
+        script_instance = self.strategy.get_script_instance()
+        if not script_instance:
+            QMessageBox.warning(self, "Train", "Could not load the strategy script.")
+            return
+            
+        # Optional: Set features_to_use to the script if it wants to know what was on the GUI
+        if hasattr(script_instance, 'features_to_use'):
+            script_instance.features_to_use = features_to_use
+        
+        self.signals_panel.btn_train.setEnabled(False)
+        self.signals_panel.progress_bar.setValue(50) # Indeterminate-ish
+        
+        # Start Thread
+        self.training_thread = TrainingThread(script_instance, self.df, all_feature_data, settings)
+        self.training_thread.finished.connect(lambda w, m: self._on_training_finished(w, m, settings, features_to_use))
+        self.training_thread.error.connect(self._on_training_error)
+        self.training_thread.log.connect(self.signals_panel.log)
+        self.training_thread.start()
+
+    def _on_training_finished(self, model_weights, metrics, settings, features_to_use):
+        self.signals_panel.btn_train.setEnabled(True)
+        self.signals_panel.progress_bar.setValue(100)
+        self.signals_panel.log(f"Accuracy: {metrics.get('accuracy',0):.2%}, Precision: {metrics.get('precision',0):.2%}")
+        
+        # Save to strategy
+        model_id = str(uuid.uuid4())[:8]
+        self.strategy.model_instances[model_id] = {
+            "weights": model_weights,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "comment": f"{settings.get('model_type')} ({metrics.get('accuracy',0):.0%})",
+            "settings": settings,
+            "training_scope": {
+                "ticker": self.controls.ticker_input.text().upper(),
+                "interval": self.controls.interval_combo.currentText(),
+                "features": features_to_use,
+                "samples": metrics.get('samples', 0)
+            },
+            "metrics": metrics
+        }
+        
+        # Auto-set active if it's the first one
+        if not self.strategy.active_model_id:
+            self.strategy.active_model_id = model_id
+            
+        self.strategy.save()
+        self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+
+    def _on_training_error(self, err_msg):
+        self.signals_panel.btn_train.setEnabled(True)
+        self.signals_panel.progress_bar.setValue(0)
+        self.signals_panel.log(f"ERROR: {err_msg}")
+        QMessageBox.critical(self, "Training Error", err_msg)
 
     def preview_signals(self):
         if self.df is None or self.df.empty:
@@ -507,7 +663,7 @@ class ChartWindow(QMainWindow):
 
     def on_signal_hovered(self, scatter, points):
         from PyQt6.QtWidgets import QToolTip
-        if points:
+        if len(points) > 0 and points:
             p = points[0]
             e = p.data() # Get the SignalEvent object
             if e:
