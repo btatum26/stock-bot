@@ -114,9 +114,9 @@ class TrainingThread(QThread):
                 raise Exception("Failed to collect any data for training.")
 
             # 3. Concatenate all data
-            final_df = pd.concat(combined_df_list)
+            final_df = pd.concat(combined_df_list).reset_index(drop=True)
             # For features, we can't easily concat if keys differ, but they should be consistent across tickers
-            final_features_df = pd.concat(combined_features_list)
+            final_features_df = pd.concat(combined_features_list).reset_index(drop=True)
             
             # Convert back to dict for the script
             final_feature_dict = {col: final_features_df[col] for col in final_features_df.columns}
@@ -736,11 +736,24 @@ class ChartWindow(QMainWindow):
                 self.signal_items.append(s)
                 main_scatters[side] = s
 
+            # Calculate a sensible vertical offset (e.g., 2% of the visible range or average volatility)
+            price_range = self.df['High'].max() - self.df['Low'].min()
+            offset = price_range * 0.03 # 3% of the total price range
+
             for e in events:
                 if e.side in main_scatters:
+                    # Determine vertical position based on side
+                    row = self.df.iloc[e.index]
+                    if e.side == 'buy':
+                        pos_y = row['Low'] - offset
+                    elif e.side == 'sell':
+                        pos_y = row['High'] + offset
+                    else:
+                        pos_y = e.value # Neutral/Unknown
+
                     # Add to main plot scatter
                     main_scatters[e.side].addPoints([{
-                        'pos': (e.index, e.value),
+                        'pos': (e.index, pos_y),
                         'data': e # Attach the event object to the point
                     }])
                 

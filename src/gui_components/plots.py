@@ -5,13 +5,15 @@ from .candles import CandlestickItem, SimpleCandleItem
 from .volume import VolumeItem
 
 class BaseOverlay:
-    def __init__(self):
+    def __init__(self, z_value=0):
         self.items = []
         self.plot_item = None
+        self.z_value = z_value
 
     def add_to_plot(self, plot_item):
         self.plot_item = plot_item
         for item in self.items:
+            item.setZValue(self.z_value)
             plot_item.addItem(item)
 
     def clear_items(self):
@@ -37,7 +39,8 @@ class BaseOverlay:
 
 class CandleOverlay(BaseOverlay):
     def __init__(self):
-        super().__init__()
+        # Maximum Z-value so it stays on top of everything
+        super().__init__(z_value=1000)
         self.candle_full = None
         self.candle_simple = None
         self.df = None
@@ -49,6 +52,11 @@ class CandleOverlay(BaseOverlay):
         data = [(float(i), r['Open'], r['Close'], r['Low'], r['High']) for i, r in enumerate(df.to_dict('records'))]
         self.candle_full = CandlestickItem(data)
         self.candle_simple = SimpleCandleItem(data)
+        
+        # Apply Z-value to new items
+        self.candle_full.setZValue(self.z_value)
+        self.candle_simple.setZValue(self.z_value)
+        
         self.items = [self.candle_full, self.candle_simple]
         
         if self.plot_item:
@@ -78,11 +86,11 @@ class CandleOverlay(BaseOverlay):
         return np.nanmin(sub['Low'].values), np.nanmax(sub['High'].values)
 
 class LineOverlay(BaseOverlay):
-    def __init__(self, data_dict, color='#fff', width=1):
+    def __init__(self, data_dict, color='#fff', width=1, z_value=10):
         """
         data_dict: {name: array_like}
         """
-        super().__init__()
+        super().__init__(z_value=z_value)
         self.data_dict = data_dict
         self.color = color
         self.width = width
@@ -94,6 +102,7 @@ class LineOverlay(BaseOverlay):
             # Handle potential None/NaN values
             clean_data = np.array([float(v) if v is not None else np.nan for v in data])
             item = pg.PlotDataItem(np.arange(len(clean_data)), clean_data, pen=pg.mkPen(self.color, width=self.width))
+            item.setZValue(self.z_value)
             self.line_items[name] = item
             self.items.append(item)
         
@@ -116,7 +125,7 @@ class LineOverlay(BaseOverlay):
 
 class VolumeOverlay(BaseOverlay):
     def __init__(self):
-        super().__init__()
+        super().__init__(z_value=-10)
         self.vol_view = pg.ViewBox()
         self.vol_item = None
         self.df = None
@@ -126,7 +135,7 @@ class VolumeOverlay(BaseOverlay):
         if plot_item.scene():
             plot_item.scene().addItem(self.vol_view)
         self.vol_view.setXLink(plot_item.vb)
-        self.vol_view.setZValue(-10)
+        self.vol_view.setZValue(self.z_value)
         self.vol_view.setMouseEnabled(x=False, y=False)
         self.vol_view.setAcceptHoverEvents(False)
         # Ensure volume view doesn't block mouse events for the main plot
@@ -155,6 +164,7 @@ class VolumeOverlay(BaseOverlay):
         self.vol_view.clear()
         data = [(float(i), r['Open'], r['Close'], r['Volume']) for i, r in enumerate(df.to_dict('records'))]
         self.vol_item = VolumeItem(data)
+        self.vol_item.setZValue(self.z_value)
         self.vol_view.addItem(self.vol_item)
 
     def update_y_range(self, x_min, x_max):
@@ -165,8 +175,8 @@ class VolumeOverlay(BaseOverlay):
         self.vol_view.setYRange(0, v_max * 4 if v_max > 0 else 1, padding=0)
 
 class LevelOverlay(BaseOverlay):
-    def __init__(self, price, color='#888', style=Qt.PenStyle.DashLine):
-        super().__init__()
+    def __init__(self, price, color='#888', style=Qt.PenStyle.DashLine, z_value=5):
+        super().__init__(z_value=z_value)
         self.price = price
         self.color = color
         self.style = style
@@ -174,6 +184,7 @@ class LevelOverlay(BaseOverlay):
     def update(self, df):
         self.clear_items()
         item = pg.InfiniteLine(pos=self.price, angle=0, pen=pg.mkPen(self.color, width=1, style=self.style))
+        item.setZValue(self.z_value)
         self.items = [item]
         if self.plot_item:
             self.add_to_plot(self.plot_item)
@@ -191,8 +202,8 @@ class UnifiedPlot(pg.PlotItem):
         # Explicitly enable mouse on the ViewBox
         self.vb.setMouseEnabled(x=True, y=False)
         self.vb.disableAutoRange(pg.ViewBox.YAxis)
-        # Ensure ViewBox is high enough in Z-order to capture events
-        self.vb.setZValue(10)
+        # ViewBox Z-order
+        self.vb.setZValue(100)
         self.vb.sigXRangeChanged.connect(self.auto_scale_y)
         
     def set_fixed_y_range(self, y_min, y_max, padding=0.1):
@@ -202,6 +213,13 @@ class UnifiedPlot(pg.PlotItem):
 
     def add_overlay(self, overlay):
         self.overlays.append(overlay)
+        # Sort overlays by Z-value whenever a new one is added
+        self.overlays.sort(key=lambda x: x.z_value)
+        
+        # When adding, we need to ensure they are added in Z-order
+        # Pyqtgraph's addItem adds items to the scene; if Z-values are set,
+        # the internal order *shouldn't* matter, but it often does for drawing order
+        # in some versions.
         overlay.add_to_plot(self)
 
     def remove_overlay(self, overlay):
@@ -214,7 +232,8 @@ class UnifiedPlot(pg.PlotItem):
             self.remove_overlay(o)
 
     def update_all(self, df):
-        for o in self.overlays:
+        # Update in Z-order
+        for o in sorted(self.overlays, key=lambda x: x.z_value):
             o.update(df)
         self.auto_scale_y()
 
@@ -227,9 +246,6 @@ class UnifiedPlot(pg.PlotItem):
         
         y_min, y_max = np.inf, -np.inf
         
-        # We only want to scale to the PRICE (CandleOverlay).
-        # Other overlays should still update their internal state (like LOD or Volume ViewBox),
-        # but they shouldn't contribute to the global Y-min/max of this PlotItem.
         for o in self.overlays:
             if isinstance(o, VolumeOverlay):
                 o.update_y_range(x_min, x_max)
