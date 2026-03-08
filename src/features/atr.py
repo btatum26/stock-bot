@@ -6,11 +6,15 @@ from .base import Feature, FeatureOutput, LineOutput, FeatureResult
 class AverageTrueRange(Feature):
     @property
     def name(self) -> str:
-        return "ATR (Scaled)"
+        return "ATR"
 
     @property
     def description(self) -> str:
-        return "Average True Range scaled to fit chart. Measures volatility."
+        return "Average True Range. Measures volatility."
+
+    @property
+    def target_pane(self) -> str:
+        return "new"
 
     @property
     def category(self) -> str:
@@ -36,23 +40,10 @@ class AverageTrueRange(Feature):
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr = tr.rolling(window=period).mean()
         
-        # Scale to Price Range
-        min_price = low.min()
-        max_price = high.max()
-        p_range = max_price - min_price
-        
-        min_atr = atr.min()
-        max_atr = atr.max()
-        
-        if max_atr != min_atr:
-            atr_scaled = ((atr - min_atr) / (max_atr - min_atr)) * p_range + min_price
-        else:
-            atr_scaled = atr
-            
         visuals = [
             LineOutput(
                 name=f"ATR {period}",
-                data=atr_scaled.where(pd.notnull(atr_scaled), None).tolist(),
+                data=atr.where(pd.notnull(atr), None).tolist(),
                 color=params.get("color", "#ff0000"),
                 width=2
             )

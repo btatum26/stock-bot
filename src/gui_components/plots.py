@@ -246,13 +246,24 @@ class UnifiedPlot(pg.PlotItem):
         
         y_min, y_max = np.inf, -np.inf
         
+        # Priority 1: Check if we have a CandleOverlay (main price chart)
+        has_candles = any(isinstance(o, CandleOverlay) for o in self.overlays)
+        
         for o in self.overlays:
             if isinstance(o, VolumeOverlay):
                 o.update_y_range(x_min, x_max)
                 continue
-                
-            if isinstance(o, CandleOverlay):
+            
+            # Update candles LOD if applicable
+            if hasattr(o, 'update_lod'):
                 o.update_lod(x_min, x_max)
+                
+            # Use general get_y_range if available
+            if hasattr(o, 'get_y_range'):
+                # If we have candles, ONLY let the CandleOverlay determine the scale
+                if has_candles and not isinstance(o, CandleOverlay):
+                    continue
+                    
                 omin, omax = o.get_y_range(x_min, x_max)
                 if omin is not None:
                     y_min = min(y_min, omin)
