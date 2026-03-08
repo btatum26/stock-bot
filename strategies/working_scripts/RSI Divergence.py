@@ -73,7 +73,7 @@ class StrategySignal(SignalModel):
     def generate_signals(self, df: pd.DataFrame, feature_data: dict) -> pd.Series:
         """
         df: DataFrame with OHLCV data ('Open', 'High', 'Low', 'Close', 'Volume')
-        feature_data: Dict of feature results (e.g. {'RSI_14': Series, 'ATR_14': Series})
+        feature_data: Dict of feature results (e.g. {'RSI_14': Series, 'ATR_14': Series, 'Volume': Series, 'Dist_to_Support': Series})
         """
         # --- ML Exit Logic Setup ---
         ml_signals = None
@@ -81,9 +81,20 @@ class StrategySignal(SignalModel):
             # Get the raw scikit-learn model object
             model = self.model_instances[self.active_model_id]['weights']
             
-            # Predict
+            # Predict using ONLY the features the model was trained on
             X = pd.DataFrame(index=df.index)
             for k, v in feature_data.items(): X[k] = v
+            
+            # Check if model has information about its training features
+            if hasattr(model, 'feature_names_in_'):
+                missing = [f for f in model.feature_names_in_ if f not in X.columns]
+                if missing:
+                    # Model expects features that are not provided in feature_data
+                    return signals
+                
+                # Filter to only the features expected by the model, in the same order
+                X = X[model.feature_names_in_]
+            
             X_clean = X.dropna()
             
             if not X_clean.empty:
@@ -93,24 +104,21 @@ class StrategySignal(SignalModel):
 
         signals = pd.Series(0, index=df.index)
         
-        # 1. Extract features
+        # 1. Extract RSI for Entry Logic
         rsi = None
-        atr = None
         for key in feature_data.keys():
-            if key.startswith('RSI'): rsi = feature_data[key]
-            if key.startswith('ATR'): atr = feature_data[key]
+            if key.startswith('RSI'): 
+                rsi = feature_data[key]
+                break
         
-        if rsi is None or atr is None:
+        if rsi is None:
             return signals
 
         # 2. Strategy Parameters
         oversold_threshold = 30
-        atr_multiplier = 3.0
         
         # 3. State Management
         in_position = False
-        highest_high = 0
-        stop_level = 0
         
         for i in range(2, len(df)):
             if not in_position:
@@ -121,28 +129,15 @@ class StrategySignal(SignalModel):
                 if is_oversold and is_reversal:
                     signals.iloc[i] = 1 # BUY
                     in_position = True
-                    highest_high = df['High'].iloc[i]
-                    stop_level = highest_high - (atr_multiplier * atr.iloc[i])
             else:
-                # EXIT LOGIC
+                # EXIT LOGIC: Exclusively ML-driven (predicts -1 for Sell)
                 should_exit = False
 
-                # Priority 1: ML Model Exit
                 if ml_signals is not None and ml_signals.iloc[i] == -1:
-                    should_exit = True
-                
-                # Priority 2: ATR Trailing Stop (Fallback/Safety)
-                highest_high = max(highest_high, df['High'].iloc[i])
-                current_stop = highest_high - (atr_multiplier * atr.iloc[i])
-                stop_level = max(stop_level, current_stop)
-                
-                if not should_exit and df['Low'].iloc[i] < stop_level:
                     should_exit = True
 
                 if should_exit:
                     signals.iloc[i] = -1 # SELL
                     in_position = False
-                    stop_level = 0
-                    highest_high = 0
                     
         return signals

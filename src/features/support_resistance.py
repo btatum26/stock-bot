@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from scipy.signal import savgol_filter
 from sklearn.cluster import AgglomerativeClustering
-from .base import Feature, FeatureOutput, LevelOutput
+from .base import Feature, FeatureOutput, LevelOutput, FeatureResult
 
 class SupportResistance(Feature):
     @property
@@ -28,7 +28,7 @@ class SupportResistance(Feature):
             "min_strength": 1.0
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         method = params.get("method", "ZigZag")
         threshold = float(params.get("threshold_pct", 0.015))
         window = int(params.get("window", 5))
@@ -45,10 +45,10 @@ class SupportResistance(Feature):
 
         clusters = self.cluster_pivots(pivots, cluster_thresh)
         
-        outputs = []
+        visuals = []
         for c in clusters:
             if c['strength'] >= min_str:
-                outputs.append(LevelOutput(
+                visuals.append(LevelOutput(
                     name=f"Level {c['price']}",
                     price=c['price'],
                     min_price=c['min_price'],
@@ -56,8 +56,33 @@ class SupportResistance(Feature):
                     strength=c['strength'],
                     color='#0000ff' # Blue base
                 ))
-                
-        return outputs
+        
+        # Calculate time-series features: Distance to nearest support and resistance
+        # For the ML model to see these, we provide them as Series in result.data
+        if not clusters:
+             return FeatureResult(visuals=visuals, data={})
+
+        prices = df['Close']
+        support_levels = [c['price'] for c in clusters if c['price'] < prices.iloc[0]] # Just a guess for initial
+        # Better: find nearest level below and above for EACH bar
+        all_levels = sorted([c['price'] for c in clusters])
+        
+        dist_to_res = pd.Series(index=df.index, dtype=float)
+        dist_to_supp = pd.Series(index=df.index, dtype=float)
+        
+        for i, price in enumerate(prices):
+            # Nearest support (level <= price)
+            supp = [l for l in all_levels if l <= price]
+            dist_to_supp.iloc[i] = (price - supp[-1]) / price if supp else 0.0
+            
+            # Nearest resistance (level >= price)
+            res = [l for l in all_levels if l >= price]
+            dist_to_res.iloc[i] = (res[0] - price) / price if res else 0.0
+
+        return FeatureResult(visuals=visuals, data={
+            "Dist_to_Support": dist_to_supp,
+            "Dist_to_Resistance": dist_to_res
+        })
 
     # --- Analysis Logic ---
 

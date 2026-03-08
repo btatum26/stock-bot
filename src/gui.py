@@ -493,6 +493,8 @@ class ChartWindow(QMainWindow):
         self._sync_active_strategy()
         try:
             self.strategy.save()
+            # Update models list to reflect feature compatibility changes
+            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
         except Exception as e:
             print(f"Autosave failed: {e}")
 
@@ -576,7 +578,7 @@ class ChartWindow(QMainWindow):
                     self._add_feature_by_name(feat_name, initial_values=params)
             
             # 4. Refresh models list
-            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
                 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load strategy: {e}")
@@ -586,7 +588,7 @@ class ChartWindow(QMainWindow):
     def set_active_model(self, model_id):
         self.strategy.active_model_id = model_id
         self.strategy.save()
-        self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+        self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
 
     def rename_model(self, model_id):
         if model_id not in self.strategy.model_instances: return
@@ -596,7 +598,7 @@ class ChartWindow(QMainWindow):
         if ok:
             info['comment'] = name
             self.strategy.save()
-            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
 
     def delete_model(self, model_id):
         if model_id in self.strategy.model_instances:
@@ -607,7 +609,7 @@ class ChartWindow(QMainWindow):
                 if self.strategy.active_model_id == model_id:
                     self.strategy.active_model_id = None
                 self.strategy.save()
-                self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+                self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
 
     def train_model(self, settings):
         if self.df is None or self.df.empty:
@@ -672,7 +674,7 @@ class ChartWindow(QMainWindow):
             self.strategy.active_model_id = model_id
             
         self.strategy.save()
-        self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id)
+        self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
 
     def _on_training_error(self, err_msg):
         self.training_panel.btn_train.setEnabled(True)

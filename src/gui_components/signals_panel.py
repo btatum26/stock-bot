@@ -86,10 +86,30 @@ class SignalsPanel(QWidget):
                 model_id = item.data(Qt.ItemDataRole.UserRole)
                 self.rename_model_requested.emit(model_id)
 
-    def refresh_models(self, instances, active_id=None):
-        """Updates the table of model instances."""
+    def refresh_models(self, instances, active_id=None, active_features=None):
+        """Updates the table of model instances. Filters by compatibility with active features."""
         self.instance_table.setRowCount(0)
+        
+        # Determine current available raw features (keys in the dict)
+        current_features = set()
+        if active_features:
+            # We need to know which RAW keys are available. 
+            # This is slightly tricky as features can produce multiple series.
+            # But the 'training_scope' stores the names of the features (e.g., 'RSI').
+            current_features = set(active_features)
+
         for model_id, info in sorted(instances.items(), key=lambda x: x[1].get('timestamp', ''), reverse=True):
+            # Compatibility Check
+            if active_features is not None:
+                scope = info.get('training_scope', {})
+                trained_features = scope.get('features', [])
+                
+                # Check if all features used during training are currently active
+                # Using a set check: is trained_features a subset of current_features?
+                is_compatible = all(f in current_features for f in trained_features)
+                if not is_compatible:
+                    continue
+
             row = self.instance_table.rowCount()
             self.instance_table.insertRow(row)
             

@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout, 
                              QGroupBox, QComboBox, QFormLayout, QSpinBox, QDoubleSpinBox, 
-                             QSlider, QProgressBar, QTextEdit, QScrollArea)
+                             QSlider, QProgressBar, QTextEdit, QScrollArea, QFrame)
 from PyQt6.QtCore import Qt, pyqtSignal
 
 class TrainingPanel(QWidget):
@@ -67,10 +67,7 @@ class TrainingPanel(QWidget):
         model_group = QGroupBox("Model Parameters")
         model_layout = QFormLayout(model_group)
         
-        self.model_type_combo = QComboBox()
-        self.model_type_combo.addItems(["RandomForest", "XGBoost"])
-        model_layout.addRow("Model Type:", self.model_type_combo)
-        
+        # Model type is fixed to RandomForest for this strategy structure
         self.n_estimators_spin = QSpinBox()
         self.n_estimators_spin.setRange(10, 2000)
         self.n_estimators_spin.setValue(100)
@@ -142,7 +139,7 @@ class TrainingPanel(QWidget):
             "range_mode": self.range_mode_combo.currentText(),
             "slice_count": self.slice_count_spin.value(),
             "slice_size": self.slice_size_spin.value(),
-            "model_type": self.model_type_combo.currentText(),
+            "model_type": "RandomForest",
             "n_estimators": self.n_estimators_spin.value(),
             "max_depth": self.max_depth_spin.value(),
             "validation_split": self.val_split_slider.value() / 100.0,
