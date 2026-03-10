@@ -1,8 +1,17 @@
+# --- AVAILABLE FEATURES ---
+# This strategy has access to the following features in `feature_data`:
+# - Volume (Always available)
+# - Support & Resistance
+# - RSI
+# - ATR
+# - Moving Average
+# --------------------------
+
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score
+import xgboost as xgb
 from src.signals.base import SignalModel
+from typing import Dict, Any
 
 class StrategySignal(SignalModel):
     def __init__(self):
@@ -10,134 +19,221 @@ class StrategySignal(SignalModel):
         self.active_model_id = None
         self.model_instances = {}
 
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        """
+        Define parameters that will show up in the Training GUI.
+        """
+        return {
+            "drawdown_penalty": 2.0,
+            "target_window": 20,
+            "oversold_threshold": 30,
+            "strength_threshold": 0.015,
+            "n_estimators": 100,
+            "max_depth": 5
+        }
+
+    def normalize_to_bar(self, df: pd.DataFrame, feature_data: dict, ref_idx: int) -> dict:
+        """
+        Normalizes price and specific technical indicators to the value at ref_idx.
+        Converts them to percentage change relative to that bar.
+        Does NOT normalize RSI.
+        """
+        normalized = {}
+        
+        # Reference prices
+        ref_price = df['Close'].iloc[ref_idx]
+        if ref_price == 0: ref_price = 1e-9
+        
+        # Normalize OHLC Price Data
+        normalized['Close'] = (df['Close'] - ref_price) / ref_price
+        normalized['High'] = (df['High'] - ref_price) / ref_price
+        normalized['Low'] = (df['Low'] - ref_price) / ref_price
+        normalized['Open'] = (df['Open'] - ref_price) / ref_price
+
+        # Normalize Features
+        for key, series in feature_data.items():
+            if 'RSI' in key:
+                normalized[key] = series
+            else:
+                ref_val = series.iloc[ref_idx]
+                if pd.isna(ref_val) or ref_val == 0:
+                    normalized[key] = (series - series.mean()) / (series.std() if series.std() != 0 else 1.0)
+                else:
+                    normalized[key] = (series - ref_val) / ref_val
+
+        return normalized
+
+    def volatility_scale_zscore(self, price_series: pd.Series, n: int = 20) -> pd.Series:
+        """Z-Score Method (Statistical Normalization)."""
+        rolling_mean = price_series.rolling(window=n).mean()
+        rolling_std = price_series.rolling(window=n).std()
+        return (price_series - rolling_mean) / rolling_std
+
+    def volatility_scale_atr(self, price_series: pd.Series, atr_series: pd.Series) -> pd.Series:
+        """ATR Method (Technical Trading)."""
+        price_diff = price_series.diff()
+        return price_diff / atr_series
+
+    def volatility_scale_returns(self, price_series: pd.Series, n: int = 20) -> pd.Series:
+        """Volatility-Scaled Returns (Machine Learning & Quant Models)."""
+        adj_price = price_series + 1.0 if price_series.max() < 10.0 else price_series
+        log_returns = pd.Series(np.log(adj_price / adj_price.shift(1)), index=price_series.index)
+        rolling_vol = log_returns.rolling(window=n).std()
+        return log_returns / rolling_vol
+
+    def generate_raw_buy_signals(self, df: pd.DataFrame, feature_data: dict, settings: dict = None) -> list:
+        """
+        Identifies all potential buy signals based on the core RSI reversal logic.
+        Returns a list of indices where a signal is triggered.
+        """
+        rsi = next((v for k, v in feature_data.items() if 'RSI' in k), None)
+        if rsi is None: return []
+
+        indices = []
+        
+        # Use provided settings or defaults from self.parameters
+        if settings is None:
+            settings = self.parameters
+        
+        oversold_threshold = settings.get("oversold_threshold", 30)
+        
+        # Look for Bullish RSI Reversal
+        for i in range(20, len(df)):
+            is_oversold = rsi.iloc[i-1] < oversold_threshold
+            is_reversal = rsi.iloc[i] > rsi.iloc[i-1] and rsi.iloc[i-1] <= rsi.iloc[i-2]
+            
+            if is_oversold and is_reversal:
+                indices.append(i)
+        
+        return indices
+
     def train(self, df: pd.DataFrame, feature_data: dict, settings: dict):
         """
-        Train an exit model: predicts if the price will drop (Sell) 
-        based on the provided technical indicators (e.g., RSI, ATR).
+        Train an XGBoost model to predict a "Potential Score" for buy signals.
+        Score = (MaxGain / TimeToMaxGain) - (alpha * MaxDrawdown)
         """
-        # 1. Prepare Features (X)
-        X = pd.DataFrame(index=df.index)
-        for k, v in feature_data.items():
-            X[k] = v
-        X = X.dropna()
+        raw_indices = self.generate_raw_buy_signals(df, feature_data, settings)
         
-        if X.empty:
-            raise ValueError("No valid feature data available for training.")
+        target_window = int(settings.get("target_window", 20))
+        alpha = float(settings.get("drawdown_penalty", 2.0))
+        candidates = [idx for idx in raw_indices if idx < len(df) - target_window]
 
-        # 2. Prepare Labels (y) - Exit Logic (Predicting Drops)
-        target_window = settings.get("target_window", 5)
-        target_threshold = settings.get("target_threshold", 0.01)
-        
-        future_close = df['Close'].shift(-target_window)
-        price_change = (future_close - df['Close']) / df['Close']
-        
-        y = pd.Series(0, index=df.index)
-        # We only care about predicting drops (Exits) for this specific hybrid strategy
-        y[price_change < -target_threshold] = -1 
-        
-        common_idx = X.index.intersection(y.index).dropna()[:-target_window]
-        X, y = X.loc[common_idx], y.loc[common_idx]
-        
-        if len(X) < 20:
-            raise ValueError(f"Not enough data to train. Need at least 20 samples, got {len(X)}.")
+        if len(candidates) < 10:
+            raise ValueError(f"Not enough signal candidates to train. Found {len(candidates)}.")
+
+        atr = next((v for k, v in feature_data.items() if 'ATR' in k), None)
+        rsi = next((v for k, v in feature_data.items() if 'RSI' in k), None)
+
+        X_list = []
+        y_list = []
+
+        zscore = self.volatility_scale_zscore(df['Close'])
+        vol_returns = self.volatility_scale_returns(df['Close'])
+        atr_scale = self.volatility_scale_atr(df['Close'], atr) if atr is not None else None
+
+        for idx in candidates:
+            # --- FEATURE CALCULATION ---
+            norm = self.normalize_to_bar(df, feature_data, idx)
+            feat = {
+                "RSI": rsi.iloc[idx],
+                "ZScore": zscore.iloc[idx],
+                "VolReturns": vol_returns.iloc[idx],
+                "ATR_Scale": atr_scale.iloc[idx] if atr_scale is not None else 0
+            }
+            for k, v in norm.items():
+                feat[f"Norm_{k}"] = v.iloc[idx]
+            X_list.append(feat)
             
-        # 3. Train/Test Split
-        split = int(len(X) * (1 - settings.get('validation_split', 0.2)))
-        X_train, X_test = X.iloc[:split], X.iloc[split:]
-        y_train, y_test = y.iloc[:split], y.iloc[split:]
-        
-        # 4. Train Model
-        model_type = settings.get('model_type', 'RandomForest')
-        if model_type == "RandomForest":
-            model = RandomForestClassifier(
-                n_estimators=settings.get('n_estimators', 100),
-                max_depth=settings.get('max_depth', 10),
-                random_state=42
-            )
-        else:
-            raise ValueError(f"Unsupported model type: {model_type}")
+            # --- TARGET CALCULATION (Score_t) ---
+            entry_price = df['Close'].iloc[idx]
+            future_prices = df['Close'].iloc[idx+1 : idx+1+target_window]
             
-        model.fit(X_train, y_train)
-        
-        # 5. Evaluate
-        y_pred = model.predict(X_test)
-        metrics = {
-            "accuracy": float(accuracy_score(y_test, y_pred)),
-            "precision": float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
-            "recall": float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
-            "samples": len(X)
-        }
-        
+            # Max Gain and Time to Max Gain
+            max_price = future_prices.max()
+            max_idx = future_prices.idxmax()
+            
+            max_gain = (max_price - entry_price) / entry_price
+            time_to_max = (max_idx - idx) # Number of bars
+            if time_to_max <= 0: time_to_max = 1
+            
+            # Max Drawdown experienced BEFORE hitting the max gain
+            prices_before_peak = df['Close'].iloc[idx+1 : max_idx + 1]
+            if not prices_before_peak.empty:
+                min_price_before_peak = prices_before_peak.min()
+                max_drawdown = (entry_price - min_price_before_peak) / entry_price
+                if max_drawdown < 0: max_drawdown = 0 # Price never went below entry
+            else:
+                max_drawdown = 0
+
+            # Composite Score
+            score = (max_gain / time_to_max) - (alpha * max_drawdown)
+            y_list.append(score)
+
+        X = pd.DataFrame(X_list)
+        y = pd.Series(y_list)
+
+        model = xgb.XGBRegressor(
+            n_estimators=int(settings.get("n_estimators", 100)),
+            max_depth=int(settings.get("max_depth", 5)),
+            learning_rate=0.1,
+            objective='reg:squarederror'
+        )
+        model.fit(X, y)
+
+        metrics = {"samples": len(candidates), "avg_score": float(y.mean())}
         return model, metrics
 
     def generate_signals(self, df: pd.DataFrame, feature_data: dict) -> pd.Series:
         """
-        df: DataFrame with OHLCV data ('Open', 'High', 'Low', 'Close', 'Volume')
-        feature_data: Dict of feature results (e.g. {'RSI_14': Series, 'ATR_14': Series, 'Volume': Series, 'Dist_to_Support': Series})
+        Entry: RSI Bullish Reversal from Oversold + XGBoost Ranking.
         """
-        # --- ML Exit Logic Setup ---
-        ml_signals = None
-        if self.active_model_id and self.active_model_id in self.model_instances:
-            # Get the raw scikit-learn model object
-            model = self.model_instances[self.active_model_id]['weights']
-            
-            # Predict using ONLY the features the model was trained on
-            X = pd.DataFrame(index=df.index)
-            for k, v in feature_data.items(): X[k] = v
-            
-            # Check if model has information about its training features
-            if hasattr(model, 'feature_names_in_'):
-                missing = [f for f in model.feature_names_in_ if f not in X.columns]
-                if missing:
-                    # Model expects features that are not provided in feature_data
-                    return signals
-                
-                # Filter to only the features expected by the model, in the same order
-                X = X[model.feature_names_in_]
-            
-            X_clean = X.dropna()
-            
-            if not X_clean.empty:
-                preds = model.predict(X_clean)
-                ml_signals = pd.Series(0, index=df.index)
-                ml_signals.loc[X_clean.index] = preds
-
         signals = pd.Series(0, index=df.index)
         
-        # 1. Extract RSI for Entry Logic
-        rsi = None
-        for key in feature_data.keys():
-            if key.startswith('RSI'): 
-                rsi = feature_data[key]
-                break
-        
-        if rsi is None:
+        if self.active_model_id not in self.model_instances:
             return signals
 
-        # 2. Strategy Parameters
-        oversold_threshold = 30
-        
-        # 3. State Management
-        in_position = False
-        
-        for i in range(2, len(df)):
-            if not in_position:
-                # ENTRY: Bullish RSI Reversal (Hardcoded)
-                is_oversold = rsi.iloc[i-1] < oversold_threshold
-                is_reversal = rsi.iloc[i] > rsi.iloc[i-1] and rsi.iloc[i-1] <= rsi.iloc[i-2]
-                
-                if is_oversold and is_reversal:
-                    signals.iloc[i] = 1 # BUY
-                    in_position = True
-            else:
-                # EXIT LOGIC: Exclusively ML-driven (predicts -1 for Sell)
-                should_exit = False
+        model_info = self.model_instances[self.active_model_id]
+        model = model_info['weights']
+        settings = model_info.get('settings', self.parameters)
 
-                if ml_signals is not None and ml_signals.iloc[i] == -1:
-                    should_exit = True
+        # Get raw signal candidates
+        raw_indices = self.generate_raw_buy_signals(df, feature_data, settings)
+        if not raw_indices:
+            return signals
 
-                if should_exit:
-                    signals.iloc[i] = -1 # SELL
-                    in_position = False
-                    
+        atr = next((v for k, v in feature_data.items() if 'ATR' in k), None)
+        rsi = next((v for k, v in feature_data.items() if 'RSI' in k), None)
+        
+        # Pre-calculate global volatility features
+        zscore = self.volatility_scale_zscore(df['Close'])
+        vol_returns = self.volatility_scale_returns(df['Close'])
+        atr_scale = self.volatility_scale_atr(df['Close'], atr) if atr is not None else None
+
+        strength_threshold = float(settings.get("strength_threshold", 0.015))
+
+        for i in raw_indices:
+            # Calculate features for this specific bar
+            norm = self.normalize_to_bar(df, feature_data, i)
+            feat = {
+                "RSI": rsi.iloc[i],
+                "ZScore": zscore.iloc[i],
+                "VolReturns": vol_returns.iloc[i],
+                "ATR_Scale": atr_scale.iloc[i] if atr_scale is not None else 0
+            }
+            for k, v in norm.items():
+                feat[f"Norm_{k}"] = v.iloc[i]
+            
+            X_bar = pd.DataFrame([feat])
+            
+            # Ensure feature order matches training
+            if hasattr(model, 'feature_names_in_'):
+                X_bar = X_bar[model.feature_names_in_]
+            
+            prediction = model.predict(X_bar)[0]
+            
+            # Trigger if prediction is strong enough
+            if prediction >= strength_threshold:
+                signals.iloc[i] = 1
+
         return signals

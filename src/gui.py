@@ -96,7 +96,7 @@ class TrainingThread(QThread):
 
                 for sub_df in ranges:
                     # Compute features for this slice
-                    feat_data = {}
+                    feat_data = {"Volume": sub_df['Volume']}
                     for feat_name, data in self.active_features.items():
                         feat = data["instance"]
                         params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
@@ -252,6 +252,11 @@ class ChartWindow(QMainWindow):
         self.sidebar_tabs.addTab(self.signals_panel, "Models")
         
         self.main_h_splitter.addWidget(self.sidebar_tabs)
+        
+        # Initial Parameter Sync
+        script_instance = self.strategy.get_script_instance()
+        if script_instance and hasattr(script_instance, 'parameters'):
+            self.training_panel.set_parameters(script_instance.parameters)
         
         # Set stretch factors: Plot Area (0) gets all extra space
         self.main_h_splitter.setStretchFactor(0, 1)
@@ -572,6 +577,13 @@ class ChartWindow(QMainWindow):
             self.strategy = Strategy.load(name)
             self.controls.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
             
+            # Update Training Parameters from Script
+            script_instance = self.strategy.get_script_instance()
+            if script_instance and hasattr(script_instance, 'parameters'):
+                self.training_panel.set_parameters(script_instance.parameters)
+            else:
+                self.training_panel._setup_default_params()
+            
             # 3. Add features from config
             for feat_name, params in self.strategy.feature_config.items():
                 if feat_name in self.available_features:
@@ -694,7 +706,7 @@ class ChartWindow(QMainWindow):
             strategy = self.strategy
             
             # 1. Compute all features required by this strategy
-            all_feature_data = {}
+            all_feature_data = {"Volume": self.df['Volume']}
             if not strategy.feature_config:
                 QMessageBox.warning(self, "Signals", f"Strategy '{strategy.name}' has no saved features. Add RSI/ATR to the Features panel and save the strategy.")
                 return

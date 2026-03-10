@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout, 
                              QGroupBox, QComboBox, QFormLayout, QSpinBox, QDoubleSpinBox, 
-                             QSlider, QProgressBar, QTextEdit, QScrollArea, QFrame)
+                             QSlider, QProgressBar, QTextEdit, QScrollArea, QFrame, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 
 class TrainingPanel(QWidget):
@@ -64,43 +64,12 @@ class TrainingPanel(QWidget):
         layout.addWidget(scope_group)
         
         # --- Model Group ---
-        model_group = QGroupBox("Model Parameters")
-        model_layout = QFormLayout(model_group)
+        self.model_group = QGroupBox("Model Parameters")
+        self.model_layout = QFormLayout(self.model_group)
+        layout.addWidget(self.model_group)
         
-        # Model type is fixed to RandomForest for this strategy structure
-        self.n_estimators_spin = QSpinBox()
-        self.n_estimators_spin.setRange(10, 2000)
-        self.n_estimators_spin.setValue(100)
-        model_layout.addRow("n_estimators:", self.n_estimators_spin)
-        
-        self.max_depth_spin = QSpinBox()
-        self.max_depth_spin.setRange(1, 100)
-        self.max_depth_spin.setValue(10)
-        model_layout.addRow("max_depth:", self.max_depth_spin)
-        
-        self.val_split_slider = QSlider(Qt.Orientation.Horizontal)
-        self.val_split_slider.setRange(5, 50)
-        self.val_split_slider.setValue(20)
-        self.lbl_val_split = QLabel("Val Split: 20%")
-        self.val_split_slider.valueChanged.connect(lambda v: self.lbl_val_split.setText(f"Val Split: {v}%"))
-        
-        val_layout = QHBoxLayout()
-        val_layout.addWidget(self.val_split_slider)
-        val_layout.addWidget(self.lbl_val_split)
-        model_layout.addRow(val_layout)
-
-        self.target_window_spin = QSpinBox()
-        self.target_window_spin.setRange(1, 100)
-        self.target_window_spin.setValue(5)
-        model_layout.addRow("Target Window:", self.target_window_spin)
-
-        self.target_threshold_spin = QDoubleSpinBox()
-        self.target_threshold_spin.setRange(0.01, 20.0)
-        self.target_threshold_spin.setValue(1.0)
-        self.target_threshold_spin.setSuffix("%")
-        model_layout.addRow("Threshold:", self.target_threshold_spin)
-        
-        layout.addWidget(model_group)
+        self.param_widgets = {}
+        self._setup_default_params()
         
         self.btn_train = QPushButton("Start Multi-Ticker Training")
         self.btn_train.setStyleSheet("background-color: #444; height: 40px; font-weight: bold;")
@@ -123,6 +92,46 @@ class TrainingPanel(QWidget):
         layout.addWidget(feedback_group)
         layout.addStretch()
 
+    def _setup_default_params(self):
+        # Default parameters if the strategy doesn't provide any
+        defaults = {
+            "n_estimators": 100,
+            "max_depth": 10,
+            "target_window": 5,
+            "target_threshold": 0.01
+        }
+        self.set_parameters(defaults)
+
+    def set_parameters(self, parameters: dict):
+        """Dynamically builds the parameter UI."""
+        # Clear existing
+        while self.model_layout.count():
+            child = self.model_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        
+        self.param_widgets = {}
+        
+        for key, val in parameters.items():
+            if isinstance(val, bool):
+                inp = QCheckBox()
+                inp.setChecked(val)
+            elif isinstance(val, int):
+                inp = QSpinBox()
+                inp.setRange(0, 10000)
+                inp.setValue(val)
+            elif isinstance(val, float):
+                inp = QDoubleSpinBox()
+                inp.setRange(0.0, 1000.0)
+                inp.setDecimals(3)
+                inp.setValue(val)
+            else:
+                inp = QLineEdit(str(val)) # Using QLineEdit for strings instead of QTextEdit
+                inp.setMaximumHeight(30)
+            
+            self.param_widgets[key] = inp
+            self.model_layout.addRow(f"{key}:", inp)
+
     def _on_ticker_mode_changed(self, index):
         self.ticker_input.setVisible(index == 1)
         self.random_ticker_count.setVisible(index == 2)
@@ -139,17 +148,24 @@ class TrainingPanel(QWidget):
             "range_mode": self.range_mode_combo.currentText(),
             "slice_count": self.slice_count_spin.value(),
             "slice_size": self.slice_size_spin.value(),
-            "model_type": "RandomForest",
-            "n_estimators": self.n_estimators_spin.value(),
-            "max_depth": self.max_depth_spin.value(),
-            "validation_split": self.val_split_slider.value() / 100.0,
-            "target_window": self.target_window_spin.value(),
-            "target_threshold": self.target_threshold_spin.value() / 100.0
+            "model_type": "XGBoost", # Defaulting to XGBoost
         }
+        
+        # Add dynamic parameters
+        for key, widget in self.param_widgets.items():
+            if isinstance(widget, QSpinBox):
+                settings[key] = widget.value()
+            elif isinstance(widget, QDoubleSpinBox):
+                settings[key] = widget.value()
+            elif isinstance(widget, QCheckBox):
+                settings[key] = widget.isChecked()
+            elif hasattr(widget, 'text'):
+                settings[key] = widget.text()
+                
         self.train_requested.emit(settings)
 
     def log(self, message):
         self.log_console.append(message)
         self.log_console.ensureCursorVisible()
 
-from PyQt6.QtWidgets import QFrame # Required for QFrame.Shape.NoFrame
+from PyQt6.QtWidgets import QFrame, QLineEdit # Required imports

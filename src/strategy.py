@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import pickle
 import importlib.util
 from typing import Dict, List, Any, Optional
@@ -241,7 +242,32 @@ class Strategy:
             "metadata": self.metadata
         }
 
+    def update_script_header(self):
+        if not os.path.exists(self.script_path):
+            return
+            
+        with open(self.script_path, 'r') as f:
+            content = f.read()
+
+        # Remove existing header if present
+        content = re.sub(r'^# --- AVAILABLE FEATURES ---\n(?:#.*\n)*# --------------------------\n+', '', content)
+        
+        header = "# --- AVAILABLE FEATURES ---\n"
+        header += "# This strategy has access to the following features in `feature_data`:\n"
+        header += "# - Volume (Always available)\n"
+        if self.feature_config:
+            for f_name in self.feature_config.keys():
+                # Avoid listing Volume twice if it's already there
+                if f_name.lower() != "volume":
+                    header += f"# - {f_name}\n"
+        header += "# --------------------------\n\n"
+        content = header + content
+        
+        with open(self.script_path, 'w') as f:
+            f.write(content)
+
     def save(self):
+        self.update_script_header()
         os.makedirs(self.directory, exist_ok=True)
         file_path = os.path.join(self.directory, f"{self.name}.strat")
         with open(file_path, 'wb') as f:

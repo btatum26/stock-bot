@@ -58,13 +58,10 @@ class SupportResistance(Feature):
                 ))
         
         # Calculate time-series features: Distance to nearest support and resistance
-        # For the ML model to see these, we provide them as Series in result.data
         if not clusters:
              return FeatureResult(visuals=visuals, data={})
 
         prices = df['Close']
-        support_levels = [c['price'] for c in clusters if c['price'] < prices.iloc[0]] # Just a guess for initial
-        # Better: find nearest level below and above for EACH bar
         all_levels = sorted([c['price'] for c in clusters])
         
         dist_to_res = pd.Series(index=df.index, dtype=float)
@@ -170,6 +167,15 @@ class SupportResistance(Feature):
     def cluster_pivots(self, pivots, threshold_pct):
         if not pivots:
             return []
+
+        if len(pivots) == 1:
+            p = pivots[0]
+            return [{
+                'price': round(float(p['price']), 2),
+                'min_price': round(float(p['price']), 2),
+                'max_price': round(float(p['price']), 2),
+                'strength': 1
+            }]
 
         prices = np.array([p['price'] for p in pivots]).reshape(-1, 1)
         avg_price = np.mean(prices)
