@@ -1,5 +1,6 @@
 import pyqtgraph as pg
 import numpy as np
+import pandas as pd
 from PyQt6.QtCore import Qt, QRectF
 from .candles import CandlestickItem, SimpleCandleItem
 from .volume import VolumeItem
@@ -192,6 +193,101 @@ class LevelOverlay(BaseOverlay):
     def get_y_range(self, x_min, x_max):
         return self.price, self.price
 
+class ScoreOverlay(BaseOverlay):
+    def __init__(self, scores, pos_color='#00ff00', neg_color='#ff0000', alpha=0.3, z_value=-100):
+        """
+        Background coloring based on scores using ImageItem for performance.
+        z_value is very low to stay behind everything.
+        """
+        super().__init__(z_value=z_value)
+        self.scores = np.array(scores) if scores is not None else None
+        self.pos_color = pg.mkColor(pos_color)
+        self.neg_color = pg.mkColor(neg_color)
+        self.alpha = alpha
+        self.img_item = pg.ImageItem()
+        self.img_item.setZValue(self.z_value)
+        self.img_item.setOpacity(1.0)
+        # Completely disable mouse events so panning works on the main chart
+        self.img_item.setEnabled(False)
+        self.items = [self.img_item]
+        self._connected = False
+        
+        # Initial data update
+        self._update_image_data()
+
+    def set_visuals(self, pos_color=None, neg_color=None, alpha=None):
+        """Update only the colors/alpha of the image for performance."""
+        if pos_color: self.pos_color = pg.mkColor(pos_color)
+        if neg_color: self.neg_color = pg.mkColor(neg_color)
+        if alpha is not None: self.alpha = alpha
+        self._update_image_data()
+
+    def _update_image_data(self):
+        if self.scores is None or len(self.scores) == 0:
+            self.img_item.setImage(np.zeros((1, 1, 4), dtype=np.uint8))
+            return
+            
+        # Create an RGBA image array (N, 1, 4)
+        n = len(self.scores)
+        img_data = np.zeros((n, 1, 4), dtype=np.uint8)
+        
+        valid_mask = ~np.isnan(self.scores)
+        if not np.any(valid_mask):
+            self.img_item.setImage(img_data)
+            return
+            
+        max_val = np.nanmax(np.abs(self.scores[valid_mask]))
+        if max_val == 0: max_val = 1.0
+
+        p = self.pos_color
+        n_col = self.neg_color
+        
+        for i, val in enumerate(self.scores):
+            if np.isnan(val) or val == 0:
+                continue
+            
+            intensity = min(1.0, abs(val) / max_val)
+            # Ensure even small scores are visible (min 10% of alpha)
+            effective_alpha = max(0.1, intensity) * self.alpha
+            alpha_val = int(255 * effective_alpha)
+            
+            if val > 0:
+                img_data[i, 0] = [p.red(), p.green(), p.blue(), alpha_val]
+            else:
+                img_data[i, 0] = [n_col.red(), n_col.green(), n_col.blue(), alpha_val]
+        
+        self.img_item.setImage(img_data)
+
+    def update(self, df):
+        # Image data doesn't change with df unless scores are re-calculated outside
+        # We just need to ensure the geometry is correct
+        self._update_img_geometry()
+
+    def add_to_plot(self, plot_item):
+        super().add_to_plot(plot_item)
+        if not self._connected:
+            plot_item.vb.sigRangeChanged.connect(self._update_img_geometry)
+            self._connected = True
+        self._update_img_geometry()
+
+    def remove_from_plot(self):
+        if self.plot_item and self._connected:
+            try: self.plot_item.vb.sigRangeChanged.disconnect(self._update_img_geometry)
+            except: pass
+            self._connected = False
+        super().remove_from_plot()
+
+    def _update_img_geometry(self):
+        if self.img_item and self.plot_item and self.scores is not None:
+            try:
+                y_range = self.plot_item.vb.viewRange()[1]
+                height = y_range[1] - y_range[0]
+                if height > 0:
+                    # Map the N pixels to X indices [0, N] and Y range
+                    self.img_item.setRect(QRectF(-0.5, y_range[0], len(self.scores), height))
+            except:
+                pass
+
 class UnifiedPlot(pg.PlotItem):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -202,8 +298,9 @@ class UnifiedPlot(pg.PlotItem):
         # Explicitly enable mouse on the ViewBox
         self.vb.setMouseEnabled(x=True, y=False)
         self.vb.disableAutoRange(pg.ViewBox.YAxis)
-        # ViewBox Z-order
+        # ViewBox Z-order - Ensure ViewBox is above background items for mouse events
         self.vb.setZValue(100)
+        # ViewBox signal for auto scaling
         self.vb.sigXRangeChanged.connect(self.auto_scale_y)
         
     def set_fixed_y_range(self, y_min, y_max, padding=0.1):
@@ -212,14 +309,9 @@ class UnifiedPlot(pg.PlotItem):
         self.setYRange(y_min, y_max, padding=padding)
 
     def add_overlay(self, overlay):
+        if overlay in self.overlays: return
         self.overlays.append(overlay)
-        # Sort overlays by Z-value whenever a new one is added
         self.overlays.sort(key=lambda x: x.z_value)
-        
-        # When adding, we need to ensure they are added in Z-order
-        # Pyqtgraph's addItem adds items to the scene; if Z-values are set,
-        # the internal order *shouldn't* matter, but it often does for drawing order
-        # in some versions.
         overlay.add_to_plot(self)
 
     def remove_overlay(self, overlay):

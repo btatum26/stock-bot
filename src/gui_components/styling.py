@@ -17,7 +17,13 @@ def setup_app_style(window):
     window.setStyleSheet("""
         QMainWindow { background-color: #1e1e1e; }
         QWidget { color: #dddddd; font-family: "Segoe UI", Arial; font-size: 10pt; }
-        QLineEdit, QComboBox { background-color: #2d2d2d; border: 1px solid #3d3d3d; padding: 4px; border-radius: 4px; color: #fff; }
+        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit { 
+            background-color: #252525; 
+            border: 1px solid #3d3d3d; 
+            padding: 4px; 
+            border-radius: 4px; 
+            color: #ffffff; 
+        }
         QComboBox::drop-down { border: none; }
         QComboBox QAbstractItemView { background-color: #2d2d2d; color: #fff; selection-background-color: #007acc; }
         QPushButton { background-color: #007acc; border: none; padding: 6px 12px; border-radius: 4px; color: white; font-weight: bold; }

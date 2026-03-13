@@ -16,6 +16,7 @@ from .features.loader import load_features
 from .features.feature_set import FeatureSet
 from .features.base import LineOutput, LevelOutput, MarkerOutput, HeatmapOutput, FeatureResult
 from .strategy import Strategy
+from .signals.base import SignalEvent
 
 # Signal Models
 from .signals.ml_models import MLSignalModel
@@ -28,7 +29,8 @@ from .gui_components.controls import ControlBar
 from .gui_components.feature_panel import FeaturePanel
 from .gui_components.signals_panel import SignalsPanel
 from .gui_components.training_panel import TrainingPanel
-from .gui_components.plots import UnifiedPlot, CandleOverlay, VolumeOverlay, LineOverlay, LevelOverlay
+from .gui_components.score_panel import ScorePanel
+from .gui_components.plots import UnifiedPlot, CandleOverlay, VolumeOverlay, LineOverlay, LevelOverlay, ScoreOverlay
 
 class TrainingThread(QThread):
     finished = pyqtSignal(object, object) # model, metrics
@@ -159,6 +161,10 @@ class ChartWindow(QMainWindow):
         self.sub_plots = {} # {feat_name: UnifiedPlot}
         self.v_lines = []
         self.signal_items = []
+        self.score_plot = None
+        self.score_plot_widget = None
+        self.score_overlay = None
+        self.score_cache = {} # {func_name: scores_series}
 
         self._init_ui()
         self.load_random()
@@ -251,9 +257,15 @@ class ChartWindow(QMainWindow):
         self.signals_panel.rename_model_requested.connect(self.rename_model)
         self.sidebar_tabs.addTab(self.signals_panel, "Models")
         
+        # Scoring Tab
+        self.score_panel = ScorePanel(self)
+        self.score_panel.settings_changed.connect(self.update_score_visualization)
+        self.sidebar_tabs.addTab(self.score_panel, "Scoring")
+        
         self.main_h_splitter.addWidget(self.sidebar_tabs)
         
-        # Initial Parameter Sync
+        # Initial Sync
+        self._sync_score_panel()
         script_instance = self.strategy.get_script_instance()
         if script_instance and hasattr(script_instance, 'parameters'):
             self.training_panel.set_parameters(script_instance.parameters)
@@ -263,6 +275,16 @@ class ChartWindow(QMainWindow):
         self.main_h_splitter.setStretchFactor(1, 0)
         
         self.showMaximized()
+
+    def _sync_score_panel(self):
+        """Populates the score panel with available functions from the strategy script."""
+        script_instance = self.strategy.get_script_instance()
+        if script_instance:
+            score_funcs = [m for m in dir(script_instance) if m.startswith('calculate_') and m.endswith('_scores')]
+            self.score_panel.set_available_functions(score_funcs)
+            # Auto-select first if none selected
+            if score_funcs and not self.score_panel.func_combo.currentText():
+                self.score_panel.func_combo.setCurrentIndex(0)
 
     def _setup_crosshair(self):
         for v in self.v_lines:
@@ -423,7 +445,9 @@ class ChartWindow(QMainWindow):
                 # Store in a temporary list to allow removal later (this is a bit hacky until we have MarkerOverlay)
                 data.setdefault("temp_items", []).append(item)
 
+        self.clear_score_cache()
         plot.update_all(self.df)
+        self._refresh_score_underlay()
 
     def remove_feature(self, feat_name, widget, reorganize=True):
         if feat_name in self.active_features:
@@ -447,7 +471,10 @@ class ChartWindow(QMainWindow):
                     del self.sub_plots[feat_name]
                 if reorganize:
                     self._reorganize_subplots()
+            
+            self.clear_score_cache()
             del self.active_features[feat_name]
+            self._refresh_score_underlay()
         widget.deleteLater()
         self._autosave_strategy()
 
@@ -591,6 +618,9 @@ class ChartWindow(QMainWindow):
             
             # 4. Refresh models list
             self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
+            
+            # 5. Sync score panel functions
+            self._sync_score_panel()
                 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load strategy: {e}")
@@ -601,6 +631,7 @@ class ChartWindow(QMainWindow):
         self.strategy.active_model_id = model_id
         self.strategy.save()
         self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
+        self._refresh_score_underlay() # New active model changes signals/scores
 
     def rename_model(self, model_id):
         if model_id not in self.strategy.model_instances: return
@@ -622,6 +653,7 @@ class ChartWindow(QMainWindow):
                     self.strategy.active_model_id = None
                 self.strategy.save()
                 self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
+                self._refresh_score_underlay()
 
     def train_model(self, settings):
         if self.df is None or self.df.empty:
@@ -687,6 +719,7 @@ class ChartWindow(QMainWindow):
             
         self.strategy.save()
         self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
+        self._refresh_score_underlay()
 
     def _on_training_error(self, err_msg):
         self.training_panel.btn_train.setEnabled(True)
@@ -721,14 +754,42 @@ class ChartWindow(QMainWindow):
                          if result.data: all_feature_data.update(result.data)
 
             # 2. Run the signal script
-            events = strategy.generate_signals(self.df, all_feature_data)
+            model_instance = strategy.get_script_instance()
+            if not model_instance:
+                raise Exception("Could not load script instance.")
             
+            model_instance.model_instances = strategy.model_instances
+            model_instance.active_model_id = strategy.active_model_id
+            
+            # Sync score panel with available functions
+            self._sync_score_panel()
+            
+            raw_signals = model_instance.generate_signals(self.df, all_feature_data)
+            self.clear_score_cache() # New signals invalidate scores
+
+            # Convert Series to Events for the legacy logic
+            events = []
+            signal_indices = raw_signals[raw_signals != 0].index
+            for idx in signal_indices:
+                iloc = self.df.index.get_loc(idx)
+                val = raw_signals[idx]
+                side = 'buy' if val == 1 else 'sell' if val == -1 else 'neutral' if val == 2 else 'unknown'
+                if side == 'unknown': continue
+                events.append(SignalEvent(name=f"{strategy.name}_Signal", index=iloc, timestamp=idx, value=self.df['Close'].iloc[iloc], side=side, description=f"Strategy Signal ({side})"))
+
             # 3. Display on charts
             # Clear old signals from main plot
             for item in self.signal_items:
                 self.main_plot.removeItem(item)
             self.signal_items = []
-            
+
+            # Clear existing score subplot if it exists to keep UI clean
+            if self.score_plot_widget:
+                self.score_plot_widget.deleteLater()
+                self.score_plot = None
+                self.score_plot_widget = None
+                self._reorganize_subplots()
+
             # Create grouped scatter items for better performance and hover handling
             scatter_configs = {
                 'buy': {'color': '#00ff00', 'sym': 't1', 'size': 15},
@@ -772,11 +833,101 @@ class ChartWindow(QMainWindow):
                     }])
                 
             QMessageBox.information(self, "Signals", f"Generated {len(events)} signals from strategy '{strategy.name}'.")
+            self._refresh_score_underlay()
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to run signals: {e}")
             import traceback
             traceback.print_exc()
+
+    def clear_score_cache(self):
+        """Invalidates the score cache when data or features change."""
+        self.score_cache = {}
+
+    def _refresh_score_underlay(self):
+        """Refreshes the score underlay if it's currently active in the panel."""
+        settings = self.score_panel.get_settings()
+        if settings.get("active"):
+            self.update_score_visualization(settings)
+
+    def update_score_visualization(self, settings):
+        if self.df is None or self.df.empty: return
+        
+        if not settings.get("active"):
+            if self.score_overlay:
+                self.main_plot.remove_overlay(self.score_overlay)
+                self.score_overlay = None
+                self.main_plot.update_all(self.df)
+            return
+
+        func_name = settings.get("function")
+        if not func_name: return
+
+        force_refresh = settings.get("force_refresh", False)
+
+        # PERFORMANCE OPTIMIZATION:
+        # If we already have an overlay for THIS function, AND it is in cache, 
+        # just update its visuals (alpha/colors) without re-calculating anything.
+        if not force_refresh and self.score_overlay and \
+           getattr(self.score_overlay, 'func_name', None) == func_name and \
+           func_name in self.score_cache:
+            self.score_overlay.set_visuals(
+                pos_color=settings.get("pos_color"),
+                neg_color=settings.get("neg_color"),
+                alpha=settings.get("alpha")
+            )
+            return
+
+        # If it's a different function, forced refresh, or not in cache, we might need to calculate
+        try:
+            if not force_refresh and func_name in self.score_cache:
+                scores = self.score_cache[func_name]
+            else:
+                strategy = self.strategy
+                model_instance = strategy.get_script_instance()
+                
+                if not hasattr(model_instance, func_name):
+                    print(f"Strategy script has no function: {func_name}")
+                    return
+
+                # Pass model metadata to the script instance
+                model_instance.model_instances = strategy.model_instances
+                model_instance.active_model_id = strategy.active_model_id
+
+                # Re-calculating signals for the current state to get fresh scores
+                all_feature_data = {"Volume": self.df['Volume']}
+                for feat_name, data in self.active_features.items():
+                    feat = data["instance"]
+                    params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
+                              for k, w in data["inputs"].items()}
+                    res = feat.compute(self.df, params)
+                    if isinstance(res, FeatureResult): all_feature_data.update(res.data)
+                    elif hasattr(res, 'data'): all_feature_data.update(res.data)
+
+                raw_signals = model_instance.generate_signals(self.df, all_feature_data)
+                
+                score_func = getattr(model_instance, func_name)
+                scores = score_func(self.df, raw_signals)
+                self.score_cache[func_name] = scores
+
+            if self.score_overlay:
+                self.main_plot.remove_overlay(self.score_overlay)
+
+            self.score_overlay = ScoreOverlay(
+                scores, 
+                pos_color=settings.get("pos_color"),
+                neg_color=settings.get("neg_color"),
+                alpha=settings.get("alpha")
+            )
+            self.score_overlay.func_name = func_name # Tag it for the optimization above
+            self.main_plot.add_overlay(self.score_overlay)
+            self.main_plot.update_all(self.df)
+            print("DEBUG: Overlay added and plot updated")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Error updating score visualization: {e}")
 
     def on_signal_hovered(self, scatter, points):
         from PyQt6.QtWidgets import QToolTip
@@ -817,11 +968,20 @@ class ChartWindow(QMainWindow):
         if self.df.empty: return
         self.controls.add_to_history(ticker)
 
+        self.clear_score_cache()
+
         # Clear signal markers
         for item in self.signal_items:
             self.main_plot.removeItem(item)
         self.signal_items = []
         
+        # Clear score plot
+        if self.score_plot_widget:
+            self.score_plot_widget.deleteLater()
+            self.score_plot = None
+            self.score_plot_widget = None
+            self._reorganize_subplots()
+
         self.timestamps = self.df.index.astype(str).tolist()
         ts_list = self.timestamps
         self.main_plot.getAxis('bottom').tickStrings = lambda values, scale, spacing: [
@@ -837,6 +997,7 @@ class ChartWindow(QMainWindow):
             
         # Initial X range
         self.main_plot.setXRange(max(0, len(self.df)-100), len(self.df))
+        self._refresh_score_underlay()
 
 def main():
     app = QApplication(sys.argv)

@@ -1,92 +1,75 @@
-# Stock Trading Bot Framework
+# Stock Bot Pro
 
-A modular Python framework for gathering historical stock data, managing a local market database, and executing trading algorithms in both backtesting and live simulation environments.
+A quantitative analysis and strategy development platform designed for market data visualization, feature engineering, and machine learning model integration.
 
-## Overview
+## Core Capabilities
 
-This tool provides a foundation for quantitative analysis and automated swing trading. It handles the complexities of data ingestion and storage, allowing developers to focus on strategy logic.
+### Visualization and Interaction
+* High-performance candlestick charting using PyQt6 and pyqtgraph.
+* Integrated volume overlays and dynamic crosshair tracking.
+* Synchronized multi-pane layouts for secondary technical indicators.
+* Rich metadata tooltips for signal events and trade markers.
 
-## Key Features
+### Feature Engineering
+* Dynamic technical indicator system (RSI, ATR, Moving Averages, Support/Resistance).
+* Real-time parameter tuning with immediate visual feedback.
+* Modular architecture for adding custom technical features.
 
-- **Local Data Persistence**: Stores OHLCV (Open, High, Low, Close, Volume) data in a SQLite database to minimize API calls and improve backtesting performance.
-- **Custom Timeframes**: Supports standard intervals (1h, 1d) and custom resampled intervals such as 4-hour bars.
-- **Backtesting Engine**: Iterates through historical data to validate strategy logic against past market conditions.
-- **Live Simulation**: Periodically fetches the latest market data to test strategy behavior in real-time.
-- **Extensible Strategy Base**: Provides a structured class-based approach for implementing custom technical indicators and signals.
+### Strategy and Machine Learning
+* Python-based strategy scripting for signal generation and custom scoring logic.
+* In-application model training using custom ticker baskets or randomized data slices.
+* Visual scoring underlays to map strategy outputs directly onto price charts.
+* Persistent model management for comparing multiple trained instances per strategy.
+
+### Data Management
+* SQLite-backed local persistence for fast historical data access.
+* Automated synchronization with Yahoo Finance for data retrieval and gap filling.
+* Strategy serialization (.strat files) to preserve workspace configurations, features, and models.
 
 ## Technical Stack
-
-- **Python 3.13+**
-- **uv**: Project and dependency management.
-- **SQLAlchemy**: Database ORM for SQLite.
-- **Pandas**: Data manipulation and analysis.
-- **yfinance**: Market data retrieval.
+* Interface: PyQt6
+* Charting: pyqtgraph
+* Data: Pandas, NumPy, SQLAlchemy (SQLite)
+* Ingestion: yfinance
+* Environment: Python 3.13+ managed via uv
 
 ## Installation
 
-Ensure you have `uv` installed on your system.
+Ensure the `uv` package manager is installed on your system.
 
 1. Clone the repository.
-2. Install dependencies:
+2. Initialize the environment:
    ```bash
    uv sync
    ```
 
 ## Usage
 
-The application is controlled via a unified CLI and a desktop GUI.
-
-### Desktop GUI
-The full interactive experience with charts, indicators, and strategy training.
+### GUI Application
+The primary interface for charting and strategy development.
 ```bash
-uv run python run_gui.py
+uv run python stock_bot.py
 ```
 
-### Unified CLI (`CLI.py`)
-
-All command-line operations are now unified under `CLI.py`.
-
-#### 1. Data Synchronization
-Sync historical data for a specific ticker to the local database.
+### CLI Operations
+For backend data management and maintenance tasks.
 ```bash
-uv run python CLI.py --mode sync --ticker AAPL --interval 4h --period 1y
-```
+# Synchronize data for a specific ticker
+uv run python CLI.py --mode sync --ticker AAPL --interval 1d --period 10y
 
-#### 2. Bulk Data Collection (Snapshot)
-Build a comprehensive local database for the top 1000 market companies.
-```bash
-uv run python CLI.py --mode bulk_sync --period 10y
-```
+# Bulk synchronize the top 1000 market companies
+uv run python CLI.py --mode bulk_sync --period 5y
 
-#### 3. Maintenance (Reset & Clean)
-Clear data for a specific ticker or remove duplicates from the database.
-```bash
-# Reset a specific ticker/interval
-uv run python CLI.py --mode reset --ticker AAPL --interval 4h
-
-# Remove duplicate records across the entire DB
+# Clean duplicate database records
 uv run python CLI.py --mode clean
 ```
 
-#### 4. Backtesting & Live Simulation
-Run the sample SMA Crossover strategy against historical or real-time data.
-```bash
-# Backtest
-uv run python CLI.py --mode backtest --ticker AAPL --interval 4h
-
-# Live Simulation
-uv run python CLI.py --mode live --ticker AAPL --interval 1h
-```
-
 ## Project Structure
-
-- `run_gui.py`: Main entry point for the desktop application.
-- `CLI.py`: Unified CLI for data management, backtesting, and maintenance.
-- `utils/`: Core utility logic (imported by CLI.py).
-  - `clean_db.py`: Logic for removing duplicates.
-  - `reset_ticker.py`: Logic for clearing specific ticker data.
-- `src/`: Core framework logic.
-  - `engine.py`: Backtesting and live execution engines.
-  - `database.py`: SQLite schema and persistence layer.
-  - `snapshot.py`: Bulk data collection logic.
-- `data/`: Storage for the SQLite database and internal strategies.
+* `stock_bot.py`: Main entry point for the desktop application.
+* `CLI.py`: Command-line interface for data operations.
+* `src/`: Core logic including the GUI orchestration, engine, and feature loaders.
+* `src/gui_components/`: Modular UI elements for plots and control panels.
+* `src/features/`: Implementations of technical indicators.
+* `src/signals/`: Base classes for rule-based and machine learning signal models.
+* `strategies/`: User strategy scripts and saved configuration files.
+* `data/`: Local storage for the SQLite market database.
