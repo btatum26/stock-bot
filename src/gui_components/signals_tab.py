@@ -8,12 +8,11 @@ from .plots import UnifiedPlot, LineOverlay
 class SignalsTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        
+        self.main_layout = QVBoxLayout(self)
+
         # Top Config Area
         config_group = QGroupBox("Strategy Signal Logic")
         config_layout = QVBoxLayout(config_group)
-        
         top_controls = QHBoxLayout()
         self.ticker_input = QLineEdit("AAPL")
         self.ticker_input.setFixedWidth(80)
@@ -57,12 +56,12 @@ class SignalsTab(QWidget):
         
         config_layout.addWidget(self.preview_widget)
         
-        self.layout.addWidget(config_group)
+        self.main_layout.addWidget(config_group)
         
         # Execution Area (Preview)
         self.btn_run_signals = QPushButton("Run & Preview Signals on Chart")
         self.btn_run_signals.setStyleSheet("background-color: #00aa00; color: white; font-weight: bold; height: 50px;")
-        self.layout.addWidget(self.btn_run_signals)
+        self.main_layout.addWidget(self.btn_run_signals)
 
         self.btn_refresh.clicked.connect(self.refresh_strategies)
         self.strategy_combo.currentIndexChanged.connect(self.update_script_info)

@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout, 
-                             QGroupBox, QComboBox, QSlider, QFrame, QColorDialog)
+                             QGroupBox, QComboBox, QSlider, QFrame, QColorDialog, QFormLayout, QDoubleSpinBox, QSpinBox, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 
@@ -8,13 +8,14 @@ class ScorePanel(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.parent = parent
+        self.main_parent = parent
         self.scoring_functions = []
         self.current_function = None
         self.pos_color = "#00ff00"
         self.neg_color = "#ff0000"
         self.alpha = 0.3
         self.active = False
+        self.param_widgets = {} # {param_name: widget}
         
         self._init_ui()
 
@@ -27,11 +28,17 @@ class ScorePanel(QWidget):
         func_group = QGroupBox("Scoring Method")
         func_layout = QVBoxLayout(func_group)
         self.func_combo = QComboBox()
-        self.func_combo.currentIndexChanged.connect(self._on_settings_changed)
+        self.func_combo.currentIndexChanged.connect(self._on_function_changed)
         func_layout.addWidget(self.func_combo)
         layout.addWidget(func_group)
 
-        # 2. Appearance Control
+        # 2. Dynamic Parameters
+        self.params_group = QGroupBox("Parameters")
+        self.params_layout = QFormLayout(self.params_group)
+        layout.addWidget(self.params_group)
+        self.params_group.hide() # Hide until parameters are added
+
+        # 3. Appearance Control
         app_group = QGroupBox("Appearance")
         app_layout = QVBoxLayout(app_group)
 
@@ -88,15 +95,68 @@ class ScorePanel(QWidget):
         self.func_combo.addItems(functions)
         self.func_combo.blockSignals(False)
 
+    def set_parameters(self, params_info):
+        """
+        Sets dynamic parameter widgets.
+        params_info: list of (name, default_value, type)
+        """
+        # Clear existing
+        while self.params_layout.count() > 0:
+            child = self.params_layout.takeAt(0)
+            if child:
+                w = child.widget()
+                if w:
+                    w.deleteLater()
+        self.param_widgets = {}
+
+        if not params_info:
+            self.params_group.hide()
+            return
+
+        for name, default, ptype in params_info:
+            if ptype == float:
+                widget = QDoubleSpinBox()
+                widget.setRange(-1000, 1000)
+                widget.setValue(float(default))
+                widget.setSingleStep(0.1)
+            elif ptype == int:
+                widget = QSpinBox()
+                widget.setRange(-10000, 10000)
+                widget.setValue(int(default))
+            elif ptype == bool:
+                widget = QCheckBox()
+                widget.setChecked(bool(default))
+            else:
+                continue
+
+            widget.valueChanged.connect(self._on_settings_changed) if not isinstance(widget, QCheckBox) else widget.stateChanged.connect(self._on_settings_changed)
+            self.params_layout.addRow(f"{name.replace('_', ' ').title()}:", widget)
+            self.param_widgets[name] = widget
+
+        self.params_group.show()
+
     def get_settings(self):
         """Returns current settings dict."""
+        params = {}
+        for name, widget in self.param_widgets.items():
+            if isinstance(widget, (QDoubleSpinBox, QSpinBox)):
+                params[name] = widget.value()
+            elif isinstance(widget, QCheckBox):
+                params[name] = widget.isChecked()
+
         return {
             "function": self.func_combo.currentText(),
+            "parameters": params,
             "pos_color": self.pos_color,
             "neg_color": self.neg_color,
             "alpha": self.alpha,
             "active": self.active
         }
+
+    def _on_function_changed(self):
+        """Called when function selection changes in combo box."""
+        # This will be handled by ChartWindow to fetch and set parameters
+        self._on_settings_changed()
 
     def _pick_color(self, target):
         initial = QColor(self.pos_color if target == 'pos' else self.neg_color)

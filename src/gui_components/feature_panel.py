@@ -24,18 +24,18 @@ class FeaturePanel(QWidget):
         main_layout.addWidget(QLabel("Active Features:"))
 
         # 2. Scrollable Area for Active Features
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.scroll_content = QWidget()
         self.active_layout = QVBoxLayout(self.scroll_content)
         self.active_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.active_layout.setContentsMargins(5, 5, 5, 5)
         
-        self.scroll.setWidget(self.scroll_content)
-        main_layout.addWidget(self.scroll)
+        self.scroll_area.setWidget(self.scroll_content)
+        main_layout.addWidget(self.scroll_area)
 
     def create_feature_widget(self, feat_name, parameters, on_update, on_remove, initial_values=None):
         group = QGroupBox(feat_name)

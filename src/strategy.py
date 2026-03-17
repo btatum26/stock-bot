@@ -122,6 +122,7 @@ class Strategy:
     1. A set of features (configuration).
     2. A Python script file that defines signal generation logic.
     3. Trained ML model instances and metadata.
+    4. Signal parameters (oversold/overbought thresholds, windows, etc.)
     
     Everything is pickled into a single .strat file.
     """
@@ -130,6 +131,7 @@ class Strategy:
                  script_content: str = None, 
                  model_instances: Dict[str, Any] = None,
                  model_definitions: Dict[str, Any] = None,
+                 signal_params: Dict[str, Any] = None,
                  active_model_id: str = None,
                  metadata: Dict[str, Any] = None,
                  directory: str = "strategies"):
@@ -141,6 +143,7 @@ class Strategy:
             "RandomForest": {"n_estimators": 100, "max_depth": 10},
             "XGBoost": {"n_estimators": 100, "max_depth": 6} 
         }
+        self.signal_params = signal_params or {}
         self.active_model_id = active_model_id
         self.metadata = metadata or {
             "author": "System",
@@ -238,6 +241,7 @@ class Strategy:
             "script_content": self.script_content,
             "model_instances": self.model_instances,
             "model_definitions": self.model_definitions,
+            "signal_params": self.signal_params,
             "active_model_id": self.active_model_id,
             "metadata": self.metadata
         }
@@ -286,6 +290,7 @@ class Strategy:
             script_content=data.get("script_content"),
             model_instances=data.get("model_instances", {}),
             model_definitions=data.get("model_definitions", {}),
+            signal_params=data.get("signal_params", {}),
             active_model_id=data.get("active_model_id"),
             metadata=data.get("metadata"),
             directory=directory

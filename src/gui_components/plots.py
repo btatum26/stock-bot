@@ -1,7 +1,7 @@
 import pyqtgraph as pg
 import numpy as np
 import pandas as pd
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 from .candles import CandlestickItem, SimpleCandleItem
 from .volume import VolumeItem
 
@@ -289,6 +289,8 @@ class ScoreOverlay(BaseOverlay):
                 pass
 
 class UnifiedPlot(pg.PlotItem):
+    sigPlotClicked = pyqtSignal(object)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.overlays = []
@@ -303,6 +305,11 @@ class UnifiedPlot(pg.PlotItem):
         # ViewBox signal for auto scaling
         self.vb.sigXRangeChanged.connect(self.auto_scale_y)
         
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self.sigPlotClicked.emit(ev)
+        super().mousePressEvent(ev)
+
     def set_fixed_y_range(self, y_min, y_max, padding=0.1):
         self.fixed_y_range = (y_min, y_max)
         self.y_padding = padding

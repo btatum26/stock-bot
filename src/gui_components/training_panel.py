@@ -8,19 +8,9 @@ class TrainingPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Wrap in Scroll Area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        main_layout.addWidget(scroll)
-        
-        container = QWidget()
-        layout = QVBoxLayout(container)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(container)
         
         # --- Data Scope Group ---
         scope_group = QGroupBox("Data Scope")
@@ -63,12 +53,12 @@ class TrainingPanel(QWidget):
         self.range_mode_combo.currentIndexChanged.connect(self._on_range_mode_changed)
         layout.addWidget(scope_group)
         
-        # --- Model Group ---
-        self.model_group = QGroupBox("Model Parameters")
+        # --- Model Hyperparameters Group ---
+        self.model_group = QGroupBox("Model Hyperparameters (ML)")
         self.model_layout = QFormLayout(self.model_group)
         layout.addWidget(self.model_group)
+        self.model_widgets = {}
         
-        self.param_widgets = {}
         self._setup_default_params()
         
         self.btn_train = QPushButton("Start Multi-Ticker Training")
@@ -90,28 +80,34 @@ class TrainingPanel(QWidget):
         feedback_layout.addWidget(self.log_console)
         
         layout.addWidget(feedback_group)
-        layout.addStretch()
+        # Remove stretch so it doesn't push the bottom down when nested
+        # layout.addStretch()
 
     def _setup_default_params(self):
-        # Default parameters if the strategy doesn't provide any
+        # Default hyperparameters
         defaults = {
             "n_estimators": 100,
             "max_depth": 10,
             "target_window": 5,
             "target_threshold": 0.01
         }
-        self.set_parameters(defaults)
+        self.set_model_parameters(defaults)
 
-    def set_parameters(self, parameters: dict):
-        """Dynamically builds the parameter UI."""
-        # Clear existing
-        while self.model_layout.count():
-            child = self.model_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-        
-        self.param_widgets = {}
-        
+    def set_model_parameters(self, parameters: dict):
+        """Dynamically builds the Model Hyperparameters UI."""
+        self._clear_layout(self.model_layout)
+        self.model_widgets = {}
+        self._build_params(parameters, self.model_layout, self.model_widgets)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            child = layout.takeAt(0)
+            if child:
+                w = child.widget()
+                if w:
+                    w.deleteLater()
+
+    def _build_params(self, parameters, layout, widget_dict):
         for key, val in parameters.items():
             if isinstance(val, bool):
                 inp = QCheckBox()
@@ -126,11 +122,11 @@ class TrainingPanel(QWidget):
                 inp.setDecimals(3)
                 inp.setValue(val)
             else:
-                inp = QLineEdit(str(val)) # Using QLineEdit for strings instead of QTextEdit
+                inp = QLineEdit(str(val))
                 inp.setMaximumHeight(30)
             
-            self.param_widgets[key] = inp
-            self.model_layout.addRow(f"{key}:", inp)
+            widget_dict[key] = inp
+            layout.addRow(f"{key}:", inp)
 
     def _on_ticker_mode_changed(self, index):
         self.ticker_input.setVisible(index == 1)
@@ -151,18 +147,22 @@ class TrainingPanel(QWidget):
             "model_type": "XGBoost", # Defaulting to XGBoost
         }
         
-        # Add dynamic parameters
-        for key, widget in self.param_widgets.items():
-            if isinstance(widget, QSpinBox):
-                settings[key] = widget.value()
-            elif isinstance(widget, QDoubleSpinBox):
-                settings[key] = widget.value()
-            elif isinstance(widget, QCheckBox):
-                settings[key] = widget.isChecked()
-            elif hasattr(widget, 'text'):
-                settings[key] = widget.text()
+        # Add Model parameters
+        for key, widget in self.model_widgets.items():
+            settings[key] = self._get_widget_value(widget)
                 
         self.train_requested.emit(settings)
+
+    def _get_widget_value(self, widget):
+        if isinstance(widget, QSpinBox):
+            return widget.value()
+        elif isinstance(widget, QDoubleSpinBox):
+            return widget.value()
+        elif isinstance(widget, QCheckBox):
+            return widget.isChecked()
+        elif hasattr(widget, 'text'):
+            return widget.text()
+        return None
 
     def log(self, message):
         self.log_console.append(message)

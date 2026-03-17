@@ -12,19 +12,9 @@ class SignalsPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Wrap in Scroll Area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        main_layout.addWidget(scroll)
-        
-        container = QWidget()
-        layout = QVBoxLayout(container)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(container)
         
         # 1. Signal Generation (Quick Action)
         self.btn_generate = QPushButton("Generate Signals")
@@ -60,7 +50,8 @@ class SignalsPanel(QWidget):
         instances_layout.addLayout(actions_layout)
         
         layout.addWidget(instances_group)
-        layout.addStretch()
+        # Remove stretch so it doesn't push the bottom down when nested
+        # layout.addStretch()
 
     def _on_set_active_clicked(self):
         row = self.instance_table.currentRow()

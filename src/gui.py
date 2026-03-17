@@ -5,6 +5,7 @@ import numpy as np
 import random
 import shutil
 import uuid
+import inspect
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter, QTabWidget, QScrollArea, QFrame, QHBoxLayout)
 from PyQt6.QtCore import Qt, QRectF, QThread, pyqtSignal
@@ -18,17 +19,12 @@ from .features.base import LineOutput, LevelOutput, MarkerOutput, HeatmapOutput,
 from .strategy import Strategy
 from .signals.base import SignalEvent
 
-# Signal Models
-from .signals.ml_models import MLSignalModel
-from .signals.rule_based import DivergenceSignalModel
-
 # Modular Components
 from .gui_components.styling import setup_app_style
 from .gui_components.axes import DateAxis
 from .gui_components.controls import ControlBar
 from .gui_components.feature_panel import FeaturePanel
-from .gui_components.signals_panel import SignalsPanel
-from .gui_components.training_panel import TrainingPanel
+from .gui_components.models_panel import ModelsPanel
 from .gui_components.score_panel import ScorePanel
 from .gui_components.plots import UnifiedPlot, CandleOverlay, VolumeOverlay, LineOverlay, LevelOverlay, ScoreOverlay
 
@@ -244,18 +240,19 @@ class ChartWindow(QMainWindow):
         feature_scroll.setWidget(self.feature_panel)
         self.sidebar_tabs.addTab(feature_scroll, "Features")
         
-        # Training Tab
-        self.training_panel = TrainingPanel(self)
-        self.training_panel.train_requested.connect(self.train_model)
-        self.sidebar_tabs.addTab(self.training_panel, "Training")
+        # Combined Models & Training Tab
+        self.models_panel = ModelsPanel(self)
+        self.signals_panel = self.models_panel.signals_panel
+        self.training_panel = self.models_panel.training_panel
         
-        # Models Tab (formerly Signals)
-        self.signals_panel = SignalsPanel(self)
         self.signals_panel.generate_requested.connect(self.preview_signals)
         self.signals_panel.set_active_requested.connect(self.set_active_model)
         self.signals_panel.delete_model_requested.connect(self.delete_model)
         self.signals_panel.rename_model_requested.connect(self.rename_model)
-        self.sidebar_tabs.addTab(self.signals_panel, "Models")
+        self.training_panel.train_requested.connect(self.train_model)
+        self.models_panel.parameters_changed.connect(self._autosave_strategy)
+        
+        self.sidebar_tabs.addTab(self.models_panel, "Models")
         
         # Scoring Tab
         self.score_panel = ScorePanel(self)
@@ -267,8 +264,13 @@ class ChartWindow(QMainWindow):
         # Initial Sync
         self._sync_score_panel()
         script_instance = self.strategy.get_script_instance()
-        if script_instance and hasattr(script_instance, 'parameters'):
-            self.training_panel.set_parameters(script_instance.parameters)
+        if script_instance:
+            params = script_instance.signal_parameters
+            if self.strategy.signal_params:
+                params.update(self.strategy.signal_params)
+            self.models_panel.set_parameters(params)
+            self.training_panel.set_model_parameters(script_instance.model_hyperparameters)
+
         
         # Set stretch factors: Plot Area (0) gets all extra space
         self.main_h_splitter.setStretchFactor(0, 1)
@@ -279,12 +281,56 @@ class ChartWindow(QMainWindow):
     def _sync_score_panel(self):
         """Populates the score panel with available functions from the strategy script."""
         script_instance = self.strategy.get_script_instance()
-        if script_instance:
-            score_funcs = [m for m in dir(script_instance) if m.startswith('calculate_') and m.endswith('_scores')]
-            self.score_panel.set_available_functions(score_funcs)
-            # Auto-select first if none selected
-            if score_funcs and not self.score_panel.func_combo.currentText():
-                self.score_panel.func_combo.setCurrentIndex(0)
+        if not script_instance:
+            self.score_panel.set_available_functions([])
+            return
+            
+        score_funcs = [m for m in dir(script_instance) if m.startswith('calculate_') and m.endswith('_scores')]
+        self.score_panel.set_available_functions(score_funcs)
+        
+        # Connect function change to parameter update
+        try:
+            self.score_panel.func_combo.currentIndexChanged.disconnect(self._update_score_params)
+        except:
+            pass
+        self.score_panel.func_combo.currentIndexChanged.connect(self._update_score_params)
+        
+        # Auto-select first if none selected
+        if score_funcs and not self.score_panel.func_combo.currentText():
+            self.score_panel.func_combo.setCurrentIndex(0)
+        
+        self._update_score_params()
+
+    def _update_score_params(self):
+        """Updates the parameters shown in the score panel based on selected function."""
+        func_name = self.score_panel.func_combo.currentText()
+        if not func_name: return
+
+        script_instance = self.strategy.get_script_instance()
+        if not script_instance: return
+        
+        if not hasattr(script_instance, func_name): return
+
+        func = getattr(script_instance, func_name)
+        sig = inspect.signature(func)
+        
+        params_info = []
+        for name, param in sig.parameters.items():
+            # Skip standard 'self', 'df', 'signals' parameters
+            if name in ['self', 'df', 'signals']:
+                continue
+            
+            default = param.default if param.default is not inspect.Parameter.empty else 0.0
+            ptype = param.annotation if param.annotation is not inspect.Parameter.empty else type(default)
+            if ptype not in [float, int, bool]:
+                # Attempt to infer from default value if annotation is missing
+                ptype = type(default)
+                if ptype not in [float, int, bool]:
+                    continue
+            
+            params_info.append((name, default, ptype))
+        
+        self.score_panel.set_parameters(params_info)
 
     def _setup_crosshair(self):
         for v in self.v_lines:
@@ -309,12 +355,96 @@ class ChartWindow(QMainWindow):
         self.price_label = pg.TextItem(anchor=(0, 1), color='#ddd', fill=pg.mkBrush(0, 0, 0, 200))
         self.time_label = pg.TextItem(anchor=(1, 0), color='#ddd', fill=pg.mkBrush(0, 0, 0, 200))
         self.vol_label = pg.TextItem(anchor=(0, 0), color='#aaa', fill=pg.mkBrush(0, 0, 0, 150))
+        self.score_label = pg.TextItem(text="Score: N/A", anchor=(0, 0), color='#00ff00', fill=pg.mkBrush(0, 0, 0, 200))
+        self.score_label.setZValue(2000)
+        self.score_label.hide()
         
         self.main_plot.addItem(self.price_label, ignoreBounds=True)
         self.main_plot.addItem(self.time_label, ignoreBounds=True)
         self.main_plot.addItem(self.vol_label, ignoreBounds=True)
+        self.main_plot.addItem(self.score_label, ignoreBounds=True)
         
         self.proxy = pg.SignalProxy(self.main_plot.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
+        self.main_plot.sigPlotClicked.connect(self.on_plot_clicked)
+
+    def on_plot_clicked(self, event):
+        print(f"DEBUG: Plot Clicked at {event.scenePos()}")
+        if self.df is None or self.df.empty: return
+        
+        pos = event.scenePos()
+        if self.main_plot.sceneBoundingRect().contains(pos):
+            mouse_point = self.main_plot.vb.mapSceneToView(pos)
+            idx = int(round(mouse_point.x()))
+            print(f"DEBUG: Index {idx}")
+            
+            if 0 <= idx < len(self.df):
+                settings = self.score_panel.get_settings()
+                func_name = settings.get("function")
+                print(f"DEBUG: Func {func_name}")
+                if not func_name: return
+                
+                if func_name not in self.score_cache:
+                    self.calculate_scores(func_name, settings.get("parameters", {}))
+                
+                if func_name in self.score_cache:
+                    scores = self.score_cache[func_name]
+                    if scores is not None and idx < len(scores):
+                        score = scores.iloc[idx]
+                        print(f"DEBUG: Score {score}")
+                        if not np.isnan(score):
+                            self.score_label.show()
+                            color = '#00ff00' if score > 0 else '#ff4444' if score < 0 else '#aaaaaa'
+                            self.score_label.setColor(color)
+                            self.score_label.setText(f"Score: {score:.4f}")
+                            
+                            view_range = self.main_plot.vb.viewRange()
+                            x_min = view_range[0][0]
+                            y_max = view_range[1][1]
+                            
+                            offset_x = (view_range[0][1] - view_range[0][0]) * 0.2
+                            self.score_label.setPos(x_min + offset_x, y_max)
+                        else:
+                            self.score_label.hide()
+                    else:
+                        print("DEBUG: Index out of scores range")
+                        self.score_label.hide()
+
+    def calculate_scores(self, func_name, params):
+        """Helper to calculate scores without triggering full visualization update."""
+        if self.df is None or self.df.empty: 
+            print("DEBUG: DF is empty, cannot calculate scores")
+            return
+        try:
+            print(f"DEBUG: Calculating scores for {func_name} with params {params}")
+            strategy = self.strategy
+            model_instance = strategy.get_script_instance()
+            if not model_instance or not hasattr(model_instance, func_name): 
+                print(f"DEBUG: Script instance missing or no {func_name}")
+                return
+
+            model_instance.model_instances = strategy.model_instances
+            model_instance.active_model_id = strategy.active_model_id
+            # Inject current Signal Parameters from UI
+            model_instance.params = self.models_panel.get_values()
+
+            all_feature_data = {"Volume": self.df['Volume']}
+            for feat_name, data in self.active_features.items():
+                feat = data["instance"]
+                f_params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
+                          for k, w in data["inputs"].items()}
+                res = feat.compute(self.df, f_params)
+                if isinstance(res, FeatureResult): all_feature_data.update(res.data)
+                elif hasattr(res, 'data'): all_feature_data.update(res.data)
+
+            raw_signals = model_instance.generate_signals(self.df, all_feature_data)
+            score_func = getattr(model_instance, func_name)
+            scores = score_func(self.df, raw_signals, **params)
+            self.score_cache[func_name] = scores
+            print(f"DEBUG: Successfully calculated scores, cache size: {len(self.score_cache)}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Error calculating scores: {e}")
 
     def mouse_moved(self, evt):
         pos = evt[0]
@@ -343,6 +473,38 @@ class ChartWindow(QMainWindow):
                 vol_str = f"{vol/1e6:.2f}M" if vol > 1e6 else f"{vol/1e3:.1f}K" if vol > 1e3 else str(int(vol))
                 self.vol_label.setPos(x_min, view_range[1][1])
                 self.vol_label.setText(f"Vol: {vol_str}")
+                
+                # Show score under crosshair
+                settings = self.score_panel.get_settings()
+                func_name = settings.get("function")
+                if func_name:
+                    if func_name not in self.score_cache:
+                        # Optional: only calculate if "Active" is checked to avoid lag
+                        if settings.get("active"):
+                            self.calculate_scores(func_name, settings.get("parameters", {}))
+                    
+                    if func_name in self.score_cache:
+                        scores = self.score_cache[func_name]
+                        if scores is not None and idx < len(scores):
+                            score = scores.iloc[idx]
+                            if not np.isnan(score):
+                                self.score_label.show()
+                                color = '#00ff00' if score > 0 else '#ff4444' if score < 0 else '#aaaaaa'
+                                self.score_label.setColor(color)
+                                self.score_label.setText(f"Score: {score:.4f}")
+                                
+                            # Position to the right of Vol label and slightly lower
+                                offset_x = (view_range[0][1] - view_range[0][0]) * 0.15
+                                y_pos = view_range[1][1] - (view_range[1][1] - view_range[1][0]) * 0.05
+                                self.score_label.setPos(x_min + offset_x, y_pos)
+                            else:
+                                self.score_label.hide()
+                        else:
+                            self.score_label.hide()
+                    else:
+                        self.score_label.hide()
+                else:
+                    self.score_label.hide()
 
     def add_feature_ui(self, initial_values=None):
         feat_name = self.feature_panel.feat_combo.currentData()
@@ -518,7 +680,10 @@ class ChartWindow(QMainWindow):
                 elif isinstance(w, QCheckBox): params[k] = w.isChecked()
                 else: params[k] = w.text()
             feature_config[feat_name] = params
+        
         self.strategy.feature_config = feature_config
+        self.strategy.signal_params = self.models_panel.get_values()
+        print(f"DEBUG: Syncing signal params: {self.models_panel.get_values()}")
 
     def _autosave_strategy(self):
         """Saves current state without prompting."""
@@ -604,12 +769,15 @@ class ChartWindow(QMainWindow):
             self.strategy = Strategy.load(name)
             self.controls.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
             
-            # Update Training Parameters from Script
+            # Update Parameters from Script and saved settings
             script_instance = self.strategy.get_script_instance()
-            if script_instance and hasattr(script_instance, 'parameters'):
-                self.training_panel.set_parameters(script_instance.parameters)
-            else:
-                self.training_panel._setup_default_params()
+            if script_instance:
+                # Use saved params if available, else defaults from script
+                params = script_instance.signal_parameters
+                if self.strategy.signal_params:
+                    params.update(self.strategy.signal_params)
+                self.models_panel.set_parameters(params)
+                self.training_panel.set_model_parameters(script_instance.model_hyperparameters)
             
             # 3. Add features from config
             for feat_name, params in self.strategy.feature_config.items():
@@ -670,6 +838,10 @@ class ChartWindow(QMainWindow):
             QMessageBox.warning(self, "Train", "Could not load the strategy script.")
             return
             
+        # Merge Signal Parameters from the separate panel into settings
+        signal_params = self.models_panel.get_values()
+        settings.update(signal_params)
+        
         if hasattr(script_instance, 'features_to_use'):
             script_instance.features_to_use = features_to_use
         
@@ -760,6 +932,8 @@ class ChartWindow(QMainWindow):
             
             model_instance.model_instances = strategy.model_instances
             model_instance.active_model_id = strategy.active_model_id
+            # Inject current Signal Parameters from UI
+            model_instance.params = self.models_panel.get_values()
             
             # Sync score panel with available functions
             self._sync_score_panel()
@@ -857,6 +1031,7 @@ class ChartWindow(QMainWindow):
             if self.score_overlay:
                 self.main_plot.remove_overlay(self.score_overlay)
                 self.score_overlay = None
+                self.score_label.hide()
                 self.main_plot.update_all(self.df)
             return
 
@@ -864,6 +1039,7 @@ class ChartWindow(QMainWindow):
         if not func_name: return
 
         force_refresh = settings.get("force_refresh", False)
+        params = settings.get("parameters", {})
 
         # PERFORMANCE OPTIMIZATION:
         # If we already have an overlay for THIS function, AND it is in cache, 
@@ -886,6 +1062,10 @@ class ChartWindow(QMainWindow):
                 strategy = self.strategy
                 model_instance = strategy.get_script_instance()
                 
+                if not model_instance:
+                    print("Strategy script instance not found.")
+                    return
+                    
                 if not hasattr(model_instance, func_name):
                     print(f"Strategy script has no function: {func_name}")
                     return
@@ -893,21 +1073,24 @@ class ChartWindow(QMainWindow):
                 # Pass model metadata to the script instance
                 model_instance.model_instances = strategy.model_instances
                 model_instance.active_model_id = strategy.active_model_id
+                # Inject current Signal Parameters from UI
+                model_instance.params = self.models_panel.get_values()
 
                 # Re-calculating signals for the current state to get fresh scores
                 all_feature_data = {"Volume": self.df['Volume']}
                 for feat_name, data in self.active_features.items():
                     feat = data["instance"]
-                    params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
+                    f_params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
                               for k, w in data["inputs"].items()}
-                    res = feat.compute(self.df, params)
+                    res = feat.compute(self.df, f_params)
                     if isinstance(res, FeatureResult): all_feature_data.update(res.data)
                     elif hasattr(res, 'data'): all_feature_data.update(res.data)
 
                 raw_signals = model_instance.generate_signals(self.df, all_feature_data)
                 
                 score_func = getattr(model_instance, func_name)
-                scores = score_func(self.df, raw_signals)
+                # Call score_func with dynamic parameters
+                scores = score_func(self.df, raw_signals, **params)
                 self.score_cache[func_name] = scores
 
             if self.score_overlay:
@@ -960,12 +1143,19 @@ class ChartWindow(QMainWindow):
     def load_chart(self):
         ticker = self.controls.ticker_input.text().upper()
         interval = self.controls.interval_combo.currentText()
+        period = self.controls.period_combo.currentText()
+
+        # Automatically pull new data from yfinance
+        try:
+            self.engine.sync_data(ticker, interval, period=period)
+        except Exception as e:
+            print(f"Error syncing data: {e}")
 
         self.df = self.db.get_data(ticker, interval)
-        if self.df.empty:
-            try: self.engine.sync_data(ticker, interval, period="10y"); self.df = self.db.get_data(ticker, interval)
-            except Exception as e: print(e)
-        if self.df.empty: return
+        if self.df is None or self.df.empty:
+            QMessageBox.warning(self, "Load Data", f"No data found for {ticker} ({interval}) even after sync attempt.")
+            return
+            
         self.controls.add_to_history(ticker)
 
         self.clear_score_cache()
@@ -994,6 +1184,8 @@ class ChartWindow(QMainWindow):
         # Update all active feature overlays
         for name in list(self.active_features.keys()):
             self.update_feature(name)
+            
+        self._sync_score_panel()
             
         # Initial X range
         self.main_plot.setXRange(max(0, len(self.df)-100), len(self.df))

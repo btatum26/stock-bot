@@ -42,7 +42,7 @@ def main():
 
         if args.mode == "backtest":
             strategy = SMACrossover()
-            engine.run_backtest(args.ticker, args.interval, strategy)
+            engine.run_backtest(args.ticker, args.interval, strategy, period=args.period)
 
         elif args.mode == "live":
             strategy = SMACrossover()

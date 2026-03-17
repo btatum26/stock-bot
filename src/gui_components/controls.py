@@ -28,6 +28,13 @@ class ControlBar(QWidget):
         self.interval_combo = QComboBox()
         self.interval_combo.addItems([ "1w", "1d", "4h", "1h", "15m"])
         layout.addWidget(self.interval_combo)
+
+        layout.addSpacing(15)
+        layout.addWidget(QLabel("Period:"))
+        self.period_combo = QComboBox()
+        self.period_combo.addItems(["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"])
+        self.period_combo.setCurrentText("1y")
+        layout.addWidget(self.period_combo)
         
         self.btn_load = QPushButton("Load Data")
         layout.addWidget(self.btn_load)

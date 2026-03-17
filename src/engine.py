@@ -68,23 +68,46 @@ class TradingEngine:
         self.db = Database(db_path)
         self.fetcher = DataFetcher()
 
-    def sync_data(self, ticker, interval, period="1mo", quiet=False):
-        """Downloads data and saves to DB."""
-        if not quiet: print(f"\nSyncing {ticker} ({interval})...")
-        df = self.fetcher.fetch_historical(ticker, interval, period=period)
+    def sync_data(self, ticker, interval, period=None, quiet=False):
+        """Downloads data and saves to DB. 
+        If period is provided, it fetches that period.
+        Otherwise, it fetches from the last known timestamp in DB to now.
+        """
+        last_ts = self.db.get_latest_timestamp(ticker, interval)
+        
+        df = pd.DataFrame()
+        if period:
+            if not quiet: print(f"\nSyncing {ticker} ({interval}) for period {period}...")
+            df = self.fetcher.fetch_historical(ticker, interval, period=period)
+        elif last_ts:
+            if not quiet: print(f"\nSyncing {ticker} ({interval}) from {last_ts} to now...")
+            # We use start=last_ts. Database.save_data handles existing records.
+            df = self.fetcher.fetch_historical(ticker, interval, start=last_ts)
+        else:
+            # Fallback if neither is provided
+            default_period = "1y"
+            if not quiet: print(f"\nNo local data found. Syncing {ticker} ({interval}) for {default_period}...")
+            df = self.fetcher.fetch_historical(ticker, interval, period=default_period)
+
         if not df.empty:
             self.db.save_data(df, ticker, interval)
             if not quiet: print(f"Saved {len(df)} bars.")
-        else:
-            print("No data found.")
+        elif not quiet:
+            print("No new data found.")
 
-    def run_backtest(self, ticker, interval, strategy, start=None, end=None):
-        """Runs a strategy against historical data in the DB."""
+    def run_backtest(self, ticker, interval, strategy, start=None, end=None, period="1y"):
+        """Runs a strategy against historical data. Automatically syncs if data is missing or old."""
         print(f"Starting Backtest: {ticker} ({interval})")
-        df = self.db.get_data(ticker, interval, start, end)
         
+        # Check if we have data. If not, sync.
+        df = self.db.get_data(ticker, interval, start, end)
         if df.empty:
-            print("No local data found. Please sync first.")
+            print(f"No local data found for {ticker} ({interval}). Fetching from yfinance...")
+            self.sync_data(ticker, interval, period=period)
+            df = self.db.get_data(ticker, interval, start, end)
+
+        if df.empty:
+            print("Still no data found. Aborting.")
             return
 
         for i in range(1, len(df)):
