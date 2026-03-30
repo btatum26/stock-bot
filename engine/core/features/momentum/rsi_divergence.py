@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional
 import pandas as pd
 import numpy as np
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 from .rsi import RSI
 
 @register_feature("RSI_Divergence_Features")
@@ -30,21 +30,21 @@ class RSIDivergenceFeatures(Feature):
         }
 
     @property
-    def outputs(self) -> List[str]:
+    def output_schema(self) -> List[OutputSchema]:
         return [
-            "RSI_Base",
-            "Is_Fractal_High_Confirmed",
-            "Is_Fractal_Low_Confirmed",
-            "Current_Confirmed_High_Price",
-            "Current_Confirmed_High_RSI",
-            "Current_Confirmed_Low_Price",
-            "Current_Confirmed_Low_RSI",
-            "Previous_High_Price",
-            "Previous_High_RSI",
-            "Previous_Low_Price",
-            "Previous_Low_RSI",
-            "Bars_Since_Previous_High",
-            "Bars_Since_Previous_Low"
+            OutputSchema(name="RSI_Base",                      output_type=OutputType.LINE,   pane=Pane.NEW, y_range=(0, 100)),
+            OutputSchema(name="Is_Fractal_High_Confirmed",     output_type=OutputType.MARKER, pane=Pane.OVERLAY),
+            OutputSchema(name="Is_Fractal_Low_Confirmed",      output_type=OutputType.MARKER, pane=Pane.OVERLAY),
+            OutputSchema(name="Current_Confirmed_High_Price",  output_type=OutputType.LINE,   pane=Pane.OVERLAY),
+            OutputSchema(name="Current_Confirmed_High_RSI",    output_type=OutputType.LINE,   pane=Pane.NEW),
+            OutputSchema(name="Current_Confirmed_Low_Price",   output_type=OutputType.LINE,   pane=Pane.OVERLAY),
+            OutputSchema(name="Current_Confirmed_Low_RSI",     output_type=OutputType.LINE,   pane=Pane.NEW),
+            OutputSchema(name="Previous_High_Price",           output_type=OutputType.LINE,   pane=Pane.OVERLAY),
+            OutputSchema(name="Previous_High_RSI",             output_type=OutputType.LINE,   pane=Pane.NEW),
+            OutputSchema(name="Previous_Low_Price",            output_type=OutputType.LINE,   pane=Pane.OVERLAY),
+            OutputSchema(name="Previous_Low_RSI",              output_type=OutputType.LINE,   pane=Pane.NEW),
+            OutputSchema(name="Bars_Since_Previous_High",      output_type=OutputType.LINE,   pane=Pane.NEW),
+            OutputSchema(name="Bars_Since_Previous_Low",       output_type=OutputType.LINE,   pane=Pane.NEW),
         ]
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:

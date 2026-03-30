@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 import pandas as pd
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("MACD")
 class MACD(Feature):
@@ -24,8 +24,12 @@ class MACD(Feature):
         return "Oscillators (Momentum)"
 
     @property
-    def outputs(self) -> List[str]:
-        return [None, "signal", "hist"]
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            OutputSchema(name=None,     output_type=OutputType.LINE,      pane=Pane.NEW),
+            OutputSchema(name="signal", output_type=OutputType.LINE,      pane=Pane.NEW),
+            OutputSchema(name="hist",   output_type=OutputType.HISTOGRAM, pane=Pane.NEW),
+        ]
 
     @property
     def parameters(self) -> Dict[str, Any]:

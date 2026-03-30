@@ -1,22 +1,17 @@
-import importlib
-import pkgutil
-import inspect
-from .base import Feature
-import gui.features
+"""Feature loader for the GUI.
+
+Loads all features from the engine's global registry and wraps them
+with the GUI adapter so they produce visual outputs (LineOutput, etc.)
+from engine-computed data.
+"""
+
+from .engine_adapter import load_engine_features
+
 
 def load_features():
-    features = {}
-    path = gui.features.__path__
-    prefix = gui.features.__name__ + "."
+    """Load all available features for GUI use.
 
-    for _, name, _ in pkgutil.iter_modules(path, prefix):
-        try:
-            module = importlib.import_module(name)
-            for _, obj in inspect.getmembers(module):
-                if inspect.isclass(obj) and issubclass(obj, Feature) and obj is not Feature:
-                    instance = obj()
-                    features[instance.name] = instance
-        except Exception as e:
-            print(f"Error loading feature {name}: {e}")
-            
-    return features
+    Returns:
+        Dict[str, AdaptedFeature]: Features keyed by display name.
+    """
+    return load_engine_features()

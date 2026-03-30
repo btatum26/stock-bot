@@ -1,20 +1,22 @@
 from typing import Dict, Any, List
 import pandas as pd
+import numpy as np
 from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
-@register_feature("ROC")
-class ROC(Feature):
+
+@register_feature("Volume")
+class VolumeIndicator(Feature):
     @property
     def name(self) -> str:
-        return "ROC"
+        return "Volume"
 
     @property
     def description(self) -> str:
-        return "Rate of Change (Percentage difference between current and n-period ago price)."
+        return "Trading volume with optional moving average."
 
     @property
     def category(self) -> str:
-        return "Oscillators (Momentum)"
+        return "Volume"
 
     @property
     def output_schema(self) -> List[OutputSchema]:
@@ -25,23 +27,15 @@ class ROC(Feature):
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
-            "period": 12,
-            "normalize": "none"
+            "normalize": "none",
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
-        period = int(params.get("period", 12))
         norm_method = params.get("normalize", "none")
-        
-        close = df['Close'] if 'Close' in df.columns else df['close']
-        
-        # ROC Calculation
-        # ((Current Close - Close n periods ago) / Close n periods ago) * 100
-        roc = close.pct_change(periods=period) * 100
-        
-        col_name = self.generate_column_name("ROC", params)
-        
-        # Apply systematic normalization
-        final_data = self.normalize(df, roc, norm_method)
-        
+
+        volume = df['Volume'] if 'Volume' in df.columns else df['volume']
+
+        col_name = self.generate_column_name("Volume", params)
+        final_data = self.normalize(df, volume, norm_method)
+
         return FeatureResult(data={col_name: final_data})

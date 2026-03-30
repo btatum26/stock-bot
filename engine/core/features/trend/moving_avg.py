@@ -1,6 +1,6 @@
 from typing import Dict, Any, List, Optional
 import pandas as pd
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("MovingAverage")
 class MovingAverage(Feature):
@@ -17,13 +17,19 @@ class MovingAverage(Feature):
         return "Trend Indicators"
 
     @property
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            OutputSchema(name=None, output_type=OutputType.LINE, pane=Pane.OVERLAY),
+        ]
+
+    @property
     def parameters(self) -> Dict[str, Any]:
         return {
             "period": 50,
             "type": "SMA",
             "normalize": "none",
         }
-        
+
     @property
     def parameter_options(self) -> Dict[str, List[Any]]:
         return {

@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 import pandas as pd
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("Stochastic")
 class Stochastic(Feature):
@@ -25,8 +25,13 @@ class Stochastic(Feature):
         }
 
     @property
-    def outputs(self) -> List[str]:
-        return ["k", "d"]
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            OutputSchema(name="k",          output_type=OutputType.LINE,  pane=Pane.NEW, y_range=(0, 100)),
+            OutputSchema(name="d",          output_type=OutputType.LINE,  pane=Pane.NEW, y_range=(0, 100)),
+            OutputSchema(name="overbought", output_type=OutputType.LEVEL, pane=Pane.NEW),
+            OutputSchema(name="oversold",   output_type=OutputType.LEVEL, pane=Pane.NEW),
+        ]
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         k_period = int(params.get("k_period", 14))

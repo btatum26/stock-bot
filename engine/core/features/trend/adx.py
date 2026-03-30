@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 import pandas as pd
 import numpy as np
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("ADX")
 class ADX(Feature):
@@ -25,8 +25,12 @@ class ADX(Feature):
         }
 
     @property
-    def outputs(self) -> List[str]:
-        return [None, "plus_di", "minus_di"]
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            OutputSchema(name=None,       output_type=OutputType.LINE, pane=Pane.NEW),
+            OutputSchema(name="plus_di",  output_type=OutputType.LINE, pane=Pane.NEW),
+            OutputSchema(name="minus_di", output_type=OutputType.LINE, pane=Pane.NEW),
+        ]
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         period = int(params.get("period", 14))

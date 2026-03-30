@@ -1,6 +1,6 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 import pandas as pd
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("VWAP")
 class VWAP(Feature):
@@ -15,6 +15,12 @@ class VWAP(Feature):
     @property
     def category(self) -> str: 
         return "Volume & Profile"
+
+    @property
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            OutputSchema(name=None, output_type=OutputType.LINE, pane=Pane.OVERLAY),
+        ]
 
     @property
     def parameters(self) -> Dict[str, Any]:

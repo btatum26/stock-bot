@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 import pandas as pd
 import numpy as np
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("OBV")
 class OBV(Feature):
@@ -24,8 +24,11 @@ class OBV(Feature):
         }
 
     @property
-    def outputs(self) -> List[str]:
-        return [None, "sma_20"]
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            OutputSchema(name=None,     output_type=OutputType.LINE, pane=Pane.NEW),
+            OutputSchema(name="sma_20", output_type=OutputType.LINE, pane=Pane.NEW),
+        ]
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         norm_method = params.get("normalize", "none")

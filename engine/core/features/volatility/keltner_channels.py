@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 import pandas as pd
 import numpy as np
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("KeltnerChannels")
 class KeltnerChannels(Feature):
@@ -27,8 +27,14 @@ class KeltnerChannels(Feature):
         }
 
     @property
-    def outputs(self) -> List[str]:
-        return ["upper", "center", "lower"]
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            OutputSchema(name="upper",  output_type=OutputType.LINE, pane=Pane.OVERLAY),
+            OutputSchema(name="center", output_type=OutputType.LINE, pane=Pane.OVERLAY),
+            OutputSchema(name="lower",  output_type=OutputType.LINE, pane=Pane.OVERLAY),
+            OutputSchema(name="fill",   output_type=OutputType.BAND, pane=Pane.OVERLAY,
+                         band_pair=("upper", "lower")),
+        ]
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         ema_period = int(params.get("ema_period", 20))

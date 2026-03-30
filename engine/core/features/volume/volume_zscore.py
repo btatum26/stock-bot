@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 import pandas as pd
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("VolumeZScore")
 class VolumeZScore(Feature):
@@ -15,6 +15,14 @@ class VolumeZScore(Feature):
     @property
     def category(self) -> str:
         return "Volume Indicators"
+
+    @property
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            OutputSchema(name=None,          output_type=OutputType.LINE,  pane=Pane.NEW),
+            OutputSchema(name="high_volume", output_type=OutputType.LEVEL, pane=Pane.NEW),
+            OutputSchema(name="low_volume",  output_type=OutputType.LEVEL, pane=Pane.NEW),
+        ]
 
     @property
     def parameters(self) -> Dict[str, Any]:

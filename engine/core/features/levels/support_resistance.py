@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from scipy.signal import savgol_filter
 from sklearn.cluster import AgglomerativeClustering
-from ..base import Feature, FeatureResult, register_feature
+from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
 @register_feature("SupportResistance")
 class SupportResistance(Feature):
@@ -24,11 +24,11 @@ class SupportResistance(Feature):
         return {
             "method": "Bill Williams",
             "threshold_pct": 0.015,
-            "window": 3, 
-            "clustering_pct": 0.02, 
+            "window": 3,
+            "clustering_pct": 0.02,
             "min_strength": 1.0
         }
-        
+
     @property
     def parameter_options(self) -> Dict[str, List[Any]]:
         return {
@@ -36,13 +36,22 @@ class SupportResistance(Feature):
         }
 
     @property
-    def outputs(self) -> List[str]:
-        return ["dist_to_support", "dist_to_resistance", "last_support_level", "last_resistance_level"]
+    def output_schema(self) -> List[OutputSchema]:
+        return [
+            # ML-safe time series for strategies
+            OutputSchema(name="dist_to_support",    output_type=OutputType.LINE, pane=Pane.NEW),
+            OutputSchema(name="dist_to_resistance", output_type=OutputType.LINE, pane=Pane.NEW),
+            OutputSchema(name="last_support_level",    output_type=OutputType.LINE, pane=Pane.OVERLAY),
+            OutputSchema(name="last_resistance_level", output_type=OutputType.LINE, pane=Pane.OVERLAY),
+            # Clustered price levels for GUI visualization
+            OutputSchema(name="levels", output_type=OutputType.LEVEL, pane=Pane.OVERLAY),
+        ]
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         method = params.get("method", "Bill Williams")
         threshold = float(params.get("threshold_pct", 0.015))
         window = int(params.get("window", 3))
+        clustering_pct = float(params.get("clustering_pct", 0.02))
 
         # Extract price pivots based on the selected method
         pivots = []
@@ -50,13 +59,13 @@ class SupportResistance(Feature):
             pivots = self.get_pivots_smoothed(df, window=5)
         elif method == "Bill Williams":
             pivots = self.get_pivots_bill_williams_vectorized(df, window=window)
-        else: 
-            pivots = self.get_pivots_zigzag(df, deviation_pct=threshold) 
+        else:
+            pivots = self.get_pivots_zigzag(df, deviation_pct=threshold)
 
         # Alpha Engine Data: Generate ML-safe level features
         supp_series = pd.Series(np.nan, index=df.index)
         res_series = pd.Series(np.nan, index=df.index)
-        
+
         # Mark the exact confirmation bar for each pivot to avoid look-ahead bias
         for p in pivots:
             idx = p['index']
@@ -65,11 +74,11 @@ class SupportResistance(Feature):
                     supp_series.iloc[idx] = p['price']
                 else:
                     res_series.iloc[idx] = p['price']
-                    
+
         # Forward-fill confirmed levels to provide a continuous state for strategies
         rolling_supp = supp_series.ffill()
         rolling_res = res_series.ffill()
-        
+
         # Calculate percentage distance from current price to the last confirmed levels
         dist_to_supp = (df['Close'] - rolling_supp) / df['Close']
         dist_to_res = (rolling_res - df['Close']) / df['Close']
@@ -87,7 +96,10 @@ class SupportResistance(Feature):
             col_last_res: rolling_res.fillna(df['Close'])
         }
 
-        return FeatureResult(data=data_dict)
+        # Cluster pivots into significant levels for visualization
+        clustered_levels = self.cluster_pivots(pivots, clustering_pct)
+
+        return FeatureResult(data=data_dict, levels=clustered_levels)
 
     # --- Pivot Extraction Methods ---
 
@@ -95,26 +107,26 @@ class SupportResistance(Feature):
         """Identifies Fractals (pivots) where a point is the highest/lowest in its local window."""
         lows = df['Low']
         highs = df['High']
-        
+
         is_support = True
         for j in range(1, window + 1):
             is_support &= (lows < lows.shift(j)) & (lows < lows.shift(-j))
         confirmed_support = is_support.shift(window)
-        
+
         is_resistance = True
         for j in range(1, window + 1):
             is_resistance &= (highs > highs.shift(j)) & (highs > highs.shift(-j))
         confirmed_resistance = is_resistance.shift(window)
-        
+
         pivots = []
         supp_indices = np.where(confirmed_support == True)[0]
         for idx in supp_indices:
             pivots.append({'price': df['Low'].iloc[idx - window], 'index': idx, 'type': 'support'})
-            
+
         res_indices = np.where(confirmed_resistance == True)[0]
         for idx in res_indices:
             pivots.append({'price': df['High'].iloc[idx - window], 'index': idx, 'type': 'resistance'})
-            
+
         return sorted(pivots, key=lambda x: x['index'])
 
     def get_pivots_smoothed(self, df, window=5, polyorder=3):
@@ -124,7 +136,7 @@ class SupportResistance(Feature):
 
         smoothed_high = savgol_filter(df['High'], window, polyorder)
         smoothed_low = savgol_filter(df['Low'], window, polyorder)
-        
+
         pivots = []
         half = window // 2
         for i in range(half, len(df) - half):
@@ -139,15 +151,15 @@ class SupportResistance(Feature):
         """Standard ZigZag algorithm tracking price swings exceeding a percentage threshold."""
         pivots = []
         last_pivot_price = df['Close'].iloc[0]
-        last_pivot_type = None 
-        
+        last_pivot_type = None
+
         for i in range(1, len(df)):
             price_high = df['High'].iloc[i]
             price_low = df['Low'].iloc[i]
-            
+
             diff_high = (price_high - last_pivot_price) / last_pivot_price
             diff_low = (price_low - last_pivot_price) / last_pivot_price
-            
+
             if last_pivot_type is None:
                 if diff_high >= deviation_pct:
                     last_pivot_type = 'H'
@@ -180,7 +192,9 @@ class SupportResistance(Feature):
         if not pivots: return []
         if len(pivots) == 1:
             p = pivots[0]
-            return [{'price': round(float(p['price']), 2), 'min_price': round(float(p['price']), 2), 'max_price': round(float(p['price']), 2), 'strength': 1}]
+            return [{'value': round(float(p['price']), 2), 'label': p['type'],
+                     'min_price': round(float(p['price']), 2), 'max_price': round(float(p['price']), 2),
+                     'strength': 1}]
 
         prices = np.array([p['price'] for p in pivots]).reshape(-1, 1)
         avg_price = np.mean(prices)
@@ -188,16 +202,17 @@ class SupportResistance(Feature):
 
         model = AgglomerativeClustering(n_clusters=None, distance_threshold=dist_threshold, linkage='complete')
         clusters = model.fit_predict(prices)
-        
+
         levels = []
         for cluster_id in np.unique(clusters):
             cluster_prices = prices[clusters == cluster_id]
             level_price = np.mean(cluster_prices)
             levels.append({
-                'price': round(float(level_price), 2),
+                'value': round(float(level_price), 2),
+                'label': f"Level {round(float(level_price), 2)}",
                 'min_price': round(float(np.min(cluster_prices)), 2),
                 'max_price': round(float(np.max(cluster_prices)), 2),
                 'strength': len(cluster_prices)
             })
-            
+
         return sorted(levels, key=lambda x: x['strength'], reverse=True)
