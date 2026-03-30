@@ -1,7 +1,6 @@
-from typing import Dict, Any, List
+from typing import Dict, Any
 import pandas as pd
-import numpy as np
-from .base import Feature, FeatureOutput, LineOutput, FeatureResult
+from .base import Feature, FeatureResult
 
 class AverageTrueRange(Feature):
     @property
@@ -13,18 +12,13 @@ class AverageTrueRange(Feature):
         return "Average True Range. Measures volatility."
 
     @property
-    def target_pane(self) -> str:
-        return "new"
-
-    @property
     def category(self) -> str:
         return "Volatility"
 
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
-            "period": 14,
-            "color": "#ff0000"
+            "period": 14
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
@@ -40,12 +34,4 @@ class AverageTrueRange(Feature):
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr = tr.rolling(window=period).mean()
         
-        visuals = [
-            LineOutput(
-                name=f"ATR {period}",
-                data=atr.where(pd.notnull(atr), None).tolist(),
-                color=params.get("color", "#ff0000"),
-                width=2
-            )
-        ]
-        return FeatureResult(visuals=visuals, data={f"ATR_{period}": atr})
+        return FeatureResult(data={f"ATR_{period}": atr})

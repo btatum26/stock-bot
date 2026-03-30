@@ -1,47 +1,65 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 import pandas as pd
 
-# --- Output Types ---
+
+# ---------------------------------------------------------------------------
+# Visual output types — used by the GUI to render indicators
+# ---------------------------------------------------------------------------
+
 @dataclass
 class FeatureOutput:
+    """Base class for all visual overlay outputs."""
     name: str
-    color: str = 'white'
+
 
 @dataclass
 class LineOutput(FeatureOutput):
-    data: List[float] = None # Matches length of DF
-    width: int = 1
+    """A continuous line overlay on the chart."""
+    data: List[Any]
+    color: str = "#ffffff"
+    width: float = 1.5
+
 
 @dataclass
 class LevelOutput(FeatureOutput):
+    """A horizontal price level (support/resistance zone)."""
     price: float = 0.0
     min_price: float = 0.0
     max_price: float = 0.0
-    strength: float = 0.0
+    strength: float = 1.0
+    color: str = "#0000ff"
+
 
 @dataclass
 class MarkerOutput(FeatureOutput):
-    indices: List[int] = None
-    values: List[float] = None
-    shape: str = 'o' # 'o', 't', 's', 'd', '+', 'x'
+    """Scatter markers on the chart (e.g. divergence signals)."""
+    indices: List[int] = field(default_factory=list)
+    values: List[float] = field(default_factory=list)
+    color: str = "#ffffff"
+    shape: str = "o"
+
 
 @dataclass
 class HeatmapOutput(FeatureOutput):
-    """
-    Represents a vertical density gradient (e.g. for KDE).
-    price_grid: Array of price points (Y-axis)
-    density: Array of density values (0.0 to 1.0) for each price point.
-    """
-    price_grid: List[float] = None
-    density: List[float] = None
-    color_map: str = 'plasma' # matplotlib colormap name or similar
+    """A price-density heatmap overlay."""
+    price_grid: List[float] = field(default_factory=list)
+    density: List[float] = field(default_factory=list)
+    color_map: str = "blue"
+
 
 @dataclass
 class FeatureResult:
-    visuals: List[FeatureOutput]
-    data: Dict[str, pd.Series] = None # Raw numerical data for signal extraction
+    """
+    Full output of a feature computation.
+
+    visuals: list of FeatureOutput subclass instances for the GUI to render.
+    data:    raw Series keyed by column name, for signal/ML use.
+    """
+    visuals: List[FeatureOutput] = field(default_factory=list)
+    data: Dict[str, pd.Series] = field(default_factory=dict)
+
 
 # --- Base Feature Class ---
 class Feature(ABC):
@@ -49,14 +67,6 @@ class Feature(ABC):
     Abstract Base Class for all Stock Bot Features.
     """
     
-    @property
-    def target_pane(self) -> str:
-        """
-        'main': Overlay on price chart.
-        'new': Create a new subplot below.
-        """
-        return "main"
-
     @property
     @abstractmethod
     def name(self) -> str:
@@ -83,25 +93,10 @@ class Feature(ABC):
         """
         return {}
 
-    @property
-    def y_range(self) -> Optional[List[float]]:
-        """
-        Fixed Y-axis range [min, max].
-        None if dynamic/data-driven.
-        """
-        return None
-
-    @property
-    def y_padding(self) -> float:
-        """
-        Default Y-axis padding (0.1 = 10% of data height).
-        """
-        return 0.1
-
     @abstractmethod
     def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         """
         Main logic. Receives OHLCV DataFrame and current parameters.
-        Returns a FeatureResult containing visual outputs and raw data.
+        Returns a FeatureResult containing raw data.
         """
         pass

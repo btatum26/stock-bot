@@ -1,7 +1,7 @@
-from typing import Dict, Any, List
+from typing import Dict, Any
 import pandas as pd
 import numpy as np
-from .base import Feature, FeatureOutput, LineOutput
+from .base import Feature, FeatureResult
 
 class CCI(Feature):
     @property
@@ -17,17 +17,12 @@ class CCI(Feature):
         return "Oscillators (Momentum)"
 
     @property
-    def target_pane(self) -> str:
-        return "new"
-
-    @property
     def parameters(self) -> Dict[str, Any]:
         return {
-            "period": 20,
-            "color": "#ff00aa"
+            "period": 20
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         period = int(params.get("period", 20))
         
         tp = (df['High'] + df['Low'] + df['Close']) / 3
@@ -36,13 +31,4 @@ class CCI(Feature):
         
         cci = (tp - sma) / (0.015 * mad)
         
-        data_list = cci.where(pd.notnull(cci), None).tolist()
-        
-        return [
-            LineOutput(
-                name=f"CCI {period}",
-                data=data_list,
-                color=params.get("color", "#ff00aa"),
-                width=2
-            )
-        ]
+        return FeatureResult(data={f"CCI_{period}": cci})

@@ -1,0 +1,15 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+logs/
+data/
+exports/
+.git
+.gitignore
+GEMINI.md
+README.md
+.python-version
+.env

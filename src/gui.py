@@ -3,20 +3,15 @@ import os
 import pandas as pd
 import numpy as np
 import random
-import shutil
-import uuid
-import inspect
-from datetime import datetime
+from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter, QTabWidget, QScrollArea, QFrame, QHBoxLayout)
 from PyQt6.QtCore import Qt, QRectF, QThread, pyqtSignal
 import pyqtgraph as pg
 
-from .database import Database
-from .engine import TradingEngine, SignalEvaluation
+from engine import ModelEngine
+
 from .features.loader import load_features
-from .features.feature_set import FeatureSet
 from .features.base import LineOutput, LevelOutput, MarkerOutput, HeatmapOutput, FeatureResult
-from .strategy import Strategy
 from .signals.base import SignalEvent
 
 # Modular Components
@@ -28,109 +23,32 @@ from .gui_components.models_panel import ModelsPanel
 from .gui_components.score_panel import ScorePanel
 from .gui_components.plots import UnifiedPlot, CandleOverlay, VolumeOverlay, LineOverlay, LevelOverlay, ScoreOverlay
 
-class TrainingThread(QThread):
-    finished = pyqtSignal(object, object) # model, metrics
-    error = pyqtSignal(str)
-    log = pyqtSignal(str)
 
-    def __init__(self, script_instance, engine, active_features, settings, current_ticker, current_interval):
+class EngineWorker(QThread):
+    """QThread wrapper that runs a ModelEngine method off the UI thread."""
+    finished = pyqtSignal(object)
+    progress = pyqtSignal(int, str)
+    log_msg  = pyqtSignal(str)
+    error    = pyqtSignal(str)
+
+    def __init__(self, engine_method, *args):
         super().__init__()
-        self.script_instance = script_instance
-        self.engine = engine
-        self.active_features = active_features
-        self.settings = settings
-        self.current_ticker = current_ticker
-        self.current_interval = current_interval
+        self.engine_method = engine_method
+        self.args = args
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
+        callbacks = {
+            "on_progress": lambda p, m: self.progress.emit(p, m),
+            "on_log":       lambda m:    self.log_msg.emit(m),
+            "is_cancelled": lambda:      self._cancelled,
+        }
         try:
-            self.log.emit(f"Starting training session...")
-            
-            # 1. Resolve Tickers
-            tickers = []
-            mode = self.settings.get("ticker_mode")
-            if mode == "Current Ticker":
-                tickers = [self.current_ticker]
-            elif mode == "Custom Basket":
-                raw = self.settings.get("ticker_list", "")
-                tickers = [t.strip().upper() for t in raw.split(",") if t.strip()]
-            elif mode == "Random Selection":
-                count = self.settings.get("random_ticker_count", 5)
-                all_available = self.engine.db.get_all_tickers()
-                if len(all_available) > count:
-                    import random
-                    tickers = random.sample(all_available, count)
-                else:
-                    tickers = all_available
-            
-            if not tickers:
-                raise Exception("No tickers selected for training.")
-
-            # 2. Collect and Prepare Data
-            combined_df_list = []
-            combined_features_list = []
-            
-            for ticker in tickers:
-                self.log.emit(f"Processing {ticker}...")
-                df = self.engine.db.get_data(ticker, self.current_interval)
-                if df.empty:
-                    self.log.emit(f"  Warning: No data for {ticker}. Skipping.")
-                    continue
-                
-                # Apply Range Mode (Slicing)
-                ranges = []
-                if self.settings.get("range_mode") == "Random Slices":
-                    num_slices = self.settings.get("slice_count", 5)
-                    slice_size = self.settings.get("slice_size", 500)
-                    if len(df) > slice_size:
-                        import random
-                        for _ in range(num_slices):
-                            start_idx = random.randint(0, len(df) - slice_size)
-                            ranges.append(df.iloc[start_idx : start_idx + slice_size])
-                    else:
-                        ranges.append(df)
-                else:
-                    ranges.append(df)
-
-                for sub_df in ranges:
-                    # Compute features for this slice
-                    feat_data = {"Volume": sub_df['Volume']}
-                    for feat_name, data in self.active_features.items():
-                        feat = data["instance"]
-                        params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
-                                  for k, w in data["inputs"].items()}
-                        res = feat.compute(sub_df, params)
-                        if isinstance(res, FeatureResult):
-                            feat_data.update(res.data)
-                        elif hasattr(res, 'data'):
-                            feat_data.update(res.data)
-                    
-                    combined_df_list.append(sub_df)
-                    combined_features_list.append(pd.DataFrame(feat_data, index=sub_df.index))
-
-            if not combined_df_list:
-                raise Exception("Failed to collect any data for training.")
-
-            # 3. Concatenate all data
-            final_df = pd.concat(combined_df_list).reset_index(drop=True)
-            # For features, we can't easily concat if keys differ, but they should be consistent across tickers
-            final_features_df = pd.concat(combined_features_list).reset_index(drop=True)
-            
-            # Convert back to dict for the script
-            final_feature_dict = {col: final_features_df[col] for col in final_features_df.columns}
-
-            # 4. Train
-            if not hasattr(self.script_instance, 'train'):
-                raise Exception("The strategy script does not have a 'train' method implemented.")
-                
-            model, metrics = self.script_instance.train(
-                final_df, 
-                final_feature_dict, 
-                self.settings
-            )
-            
-            self.log.emit("Training complete.")
-            self.finished.emit(model, metrics)
+            result = self.engine_method(*self.args, callbacks=callbacks)
+            self.finished.emit(result)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -143,13 +61,13 @@ class ChartWindow(QMainWindow):
         self.resize(1400, 900)
         setup_app_style(self)
         
-        self.db = Database("data/stocks.db")
-        self.engine = TradingEngine()
+        self.engine = ModelEngine(workspace_dir="strategies", db_path="data/stocks.db")
         self.available_features = load_features()
-        self.active_features = {} # {name: {params, overlays, plot_item_ref}}
-        
-        # Initial strategy is saved in a hidden location
-        self.strategy = Strategy("Default", directory="data/.internal_strategies")
+        self.active_features = {}  # {name: {params, overlays, plot_item_ref}}
+
+        # Strategy state
+        self.current_strategy = None  # name of selected strategy workspace folder
+        self._worker = None
         
         # State
         self.df = None
@@ -195,8 +113,8 @@ class ChartWindow(QMainWindow):
         self.controls.btn_save_strategy.clicked.connect(self.save_strategy)
         self.controls.btn_load_strategy.clicked.connect(self.load_strategy)
         self.controls.btn_rename_strategy.clicked.connect(self.rename_strategy)
-        self.controls.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
-        
+        self.controls.lbl_strategy_name.setText("Strategy: (none)")
+
         left_layout.addWidget(self.controls)
         
         # Plot Area Splitter
@@ -263,13 +181,6 @@ class ChartWindow(QMainWindow):
         
         # Initial Sync
         self._sync_score_panel()
-        script_instance = self.strategy.get_script_instance()
-        if script_instance:
-            params = script_instance.signal_parameters
-            if self.strategy.signal_params:
-                params.update(self.strategy.signal_params)
-            self.models_panel.set_parameters(params)
-            self.training_panel.set_model_parameters(script_instance.model_hyperparameters)
 
         
         # Set stretch factors: Plot Area (0) gets all extra space
@@ -279,58 +190,10 @@ class ChartWindow(QMainWindow):
         self.showMaximized()
 
     def _sync_score_panel(self):
-        """Populates the score panel with available functions from the strategy script."""
-        script_instance = self.strategy.get_script_instance()
-        if not script_instance:
-            self.score_panel.set_available_functions([])
-            return
-            
-        score_funcs = [m for m in dir(script_instance) if m.startswith('calculate_') and m.endswith('_scores')]
-        self.score_panel.set_available_functions(score_funcs)
-        
-        # Connect function change to parameter update
-        try:
-            self.score_panel.func_combo.currentIndexChanged.disconnect(self._update_score_params)
-        except:
-            pass
-        self.score_panel.func_combo.currentIndexChanged.connect(self._update_score_params)
-        
-        # Auto-select first if none selected
-        if score_funcs and not self.score_panel.func_combo.currentText():
-            self.score_panel.func_combo.setCurrentIndex(0)
-        
-        self._update_score_params()
+        self.score_panel.set_available_functions([])
 
     def _update_score_params(self):
-        """Updates the parameters shown in the score panel based on selected function."""
-        func_name = self.score_panel.func_combo.currentText()
-        if not func_name: return
-
-        script_instance = self.strategy.get_script_instance()
-        if not script_instance: return
-        
-        if not hasattr(script_instance, func_name): return
-
-        func = getattr(script_instance, func_name)
-        sig = inspect.signature(func)
-        
-        params_info = []
-        for name, param in sig.parameters.items():
-            # Skip standard 'self', 'df', 'signals' parameters
-            if name in ['self', 'df', 'signals']:
-                continue
-            
-            default = param.default if param.default is not inspect.Parameter.empty else 0.0
-            ptype = param.annotation if param.annotation is not inspect.Parameter.empty else type(default)
-            if ptype not in [float, int, bool]:
-                # Attempt to infer from default value if annotation is missing
-                ptype = type(default)
-                if ptype not in [float, int, bool]:
-                    continue
-            
-            params_info.append((name, default, ptype))
-        
-        self.score_panel.set_parameters(params_info)
+        pass
 
     def _setup_crosshair(self):
         for v in self.v_lines:
@@ -410,41 +273,7 @@ class ChartWindow(QMainWindow):
                         self.score_label.hide()
 
     def calculate_scores(self, func_name, params):
-        """Helper to calculate scores without triggering full visualization update."""
-        if self.df is None or self.df.empty: 
-            print("DEBUG: DF is empty, cannot calculate scores")
-            return
-        try:
-            print(f"DEBUG: Calculating scores for {func_name} with params {params}")
-            strategy = self.strategy
-            model_instance = strategy.get_script_instance()
-            if not model_instance or not hasattr(model_instance, func_name): 
-                print(f"DEBUG: Script instance missing or no {func_name}")
-                return
-
-            model_instance.model_instances = strategy.model_instances
-            model_instance.active_model_id = strategy.active_model_id
-            # Inject current Signal Parameters from UI
-            model_instance.params = self.models_panel.get_values()
-
-            all_feature_data = {"Volume": self.df['Volume']}
-            for feat_name, data in self.active_features.items():
-                feat = data["instance"]
-                f_params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
-                          for k, w in data["inputs"].items()}
-                res = feat.compute(self.df, f_params)
-                if isinstance(res, FeatureResult): all_feature_data.update(res.data)
-                elif hasattr(res, 'data'): all_feature_data.update(res.data)
-
-            raw_signals = model_instance.generate_signals(self.df, all_feature_data)
-            score_func = getattr(model_instance, func_name)
-            scores = score_func(self.df, raw_signals, **params)
-            self.score_cache[func_name] = scores
-            print(f"DEBUG: Successfully calculated scores, cache size: {len(self.score_cache)}")
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"Error calculating scores: {e}")
+        pass
 
     def mouse_moved(self, evt):
         pos = evt[0]
@@ -664,234 +493,94 @@ class ChartWindow(QMainWindow):
         self.plot_splitter.setSizes(sizes)
 
     def rename_strategy(self):
-        name, ok = QInputDialog.getText(self, "Rename Strategy", "Enter new name:", text=self.strategy.name)
-        if ok and name:
-            self.strategy.name = name
-            self.controls.lbl_strategy_name.setText(f"Strategy: {name}")
-            self._autosave_strategy()
+        QMessageBox.information(self, "Rename Strategy",
+                                "Strategies are managed as workspace directories.\n"
+                                "Rename the folder in the 'strategies/' directory directly.")
 
     def _sync_active_strategy(self):
-        """Syncs GUI feature state into self.strategy object."""
-        feature_config = {}
-        for feat_name, data in self.active_features.items():
-            params = {}
-            for k, w in data["inputs"].items():
-                if isinstance(w, QComboBox): params[k] = w.currentText()
-                elif isinstance(w, QCheckBox): params[k] = w.isChecked()
-                else: params[k] = w.text()
-            feature_config[feat_name] = params
-        
-        self.strategy.feature_config = feature_config
-        self.strategy.signal_params = self.models_panel.get_values()
-        print(f"DEBUG: Syncing signal params: {self.models_panel.get_values()}")
+        pass  # Feature overlays are UI-only; strategy definition lives in manifest.json
 
     def _autosave_strategy(self):
-        """Saves current state without prompting."""
-        self._sync_active_strategy()
-        try:
-            self.strategy.save()
-            # Update models list to reflect feature compatibility changes
-            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
-        except Exception as e:
-            print(f"Autosave failed: {e}")
+        self.signals_panel.refresh_models({}, None, self.active_features.keys())
 
     def save_strategy(self):
-        name, ok = QInputDialog.getText(self, "Save Strategy", "Enter a name for this strategy:", text=self.strategy.name)
-        if not ok or not name: return
-        
-        old_script_path = self.strategy.script_path
-        
-        self.strategy.name = name
-        self.strategy.directory = "strategies" # Move from internal to main if it was internal
-        self._sync_active_strategy()
-        self.controls.lbl_strategy_name.setText(f"Strategy: {name}")
-        
-        # Ensure the physical .py file follows the name change
-        new_script_path = self.strategy.script_path
-        if os.path.exists(old_script_path) and old_script_path != new_script_path:
-            try:
-                os.makedirs(os.path.dirname(new_script_path), exist_ok=True)
-                shutil.copy(old_script_path, new_script_path)
-            except Exception as e:
-                print(f"Error moving script file: {e}")
-
-        try:
-            self.strategy.save()
-            QMessageBox.information(self, "Save Strategy", f"Strategy '{name}' saved successfully.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save strategy: {e}")
+        QMessageBox.information(self, "Save Strategy",
+                                "Strategies are workspace directories in 'strategies/'.\n"
+                                "Use 'Load Strategy' to select a workspace, then edit\n"
+                                "manifest.json and model.py directly.")
 
     def closeEvent(self, event):
-        """Cleanup working scripts on exit."""
-        # 1. Handle main strategies
-        working_dir = os.path.join("strategies", "working_scripts")
-        self._cleanup_working_dir(working_dir, "strategies")
-        
-        # 2. Handle internal strategies
-        internal_working_dir = os.path.join("data", ".internal_strategies", "working_scripts")
-        self._cleanup_working_dir(internal_working_dir, "data/.internal_strategies")
-        
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self._worker.wait(2000)
         event.accept()
 
-    def _cleanup_working_dir(self, working_dir, strat_dir):
-        if os.path.exists(working_dir):
-            for f in os.listdir(working_dir):
-                if f.endswith(".py"):
-                    name = f[:-3]
-                    try:
-                        strat = Strategy.load(name, directory=strat_dir)
-                        strat.save()
-                    except Exception as e:
-                        print(f"Error syncing strategy {name}: {e}")
-            try:
-                shutil.rmtree(working_dir, ignore_errors=True)
-                os.makedirs(working_dir, exist_ok=True)
-            except Exception as e:
-                print(f"Error wiping {working_dir}: {e}")
-
     def load_strategy(self):
-        available = Strategy.list_available()
-        if not available:
-            QMessageBox.warning(self, "Load Strategy", "No saved strategies found.")
+        try:
+            available = self.engine.list_strategies()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not list strategies: {e}")
             return
 
-        name, ok = QInputDialog.getItem(self, "Load Strategy", "Select a strategy:", available, 0, False)
-        if not ok or not name: return
+        if not available:
+            QMessageBox.warning(self, "Load Strategy",
+                                "No strategy workspaces found in 'strategies/'.\n"
+                                "Create one with: uv run python main.py INIT --strategy <name>")
+            return
 
-        try:
-            # 1. Clear current features
-            for feat_name in list(self.active_features.keys()):
-                data = self.active_features[feat_name]
-                self.remove_feature(feat_name, data["widget"], reorganize=False)
-            self._reorganize_subplots()
+        name, ok = QInputDialog.getItem(self, "Load Strategy", "Select a strategy workspace:", available, 0, False)
+        if not ok or not name:
+            return
 
-            # 2. Load strategy
-            self.strategy = Strategy.load(name)
-            self.controls.lbl_strategy_name.setText(f"Strategy: {self.strategy.name}")
-            
-            # Update Parameters from Script and saved settings
-            script_instance = self.strategy.get_script_instance()
-            if script_instance:
-                # Use saved params if available, else defaults from script
-                params = script_instance.signal_parameters
-                if self.strategy.signal_params:
-                    params.update(self.strategy.signal_params)
-                self.models_panel.set_parameters(params)
-                self.training_panel.set_model_parameters(script_instance.model_hyperparameters)
-            
-            # 3. Add features from config
-            for feat_name, params in self.strategy.feature_config.items():
-                if feat_name in self.available_features:
-                    self._add_feature_by_name(feat_name, initial_values=params)
-            
-            # 4. Refresh models list
-            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
-            
-            # 5. Sync score panel functions
-            self._sync_score_panel()
-                
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load strategy: {e}")
-            import traceback
-            traceback.print_exc()
+        self.current_strategy = name
+        self.controls.lbl_strategy_name.setText(f"Strategy: {name}")
+        self.signals_panel.refresh_models({}, None, self.active_features.keys())
+        self._sync_score_panel()
 
     def set_active_model(self, model_id):
-        self.strategy.active_model_id = model_id
-        self.strategy.save()
-        self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
-        self._refresh_score_underlay() # New active model changes signals/scores
+        pass
 
     def rename_model(self, model_id):
-        if model_id not in self.strategy.model_instances: return
-        info = self.strategy.model_instances[model_id]
-        current_name = info.get('comment', '')
-        name, ok = QInputDialog.getText(self, "Rename Model", "Enter new name/comment:", text=current_name)
-        if ok:
-            info['comment'] = name
-            self.strategy.save()
-            self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
+        pass
 
     def delete_model(self, model_id):
-        if model_id in self.strategy.model_instances:
-            reply = QMessageBox.question(self, "Delete Model", "Are you sure you want to delete this trained model?",
-                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.Yes:
-                self.strategy.model_instances.pop(model_id)
-                if self.strategy.active_model_id == model_id:
-                    self.strategy.active_model_id = None
-                self.strategy.save()
-                self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
-                self._refresh_score_underlay()
+        pass
 
     def train_model(self, settings):
         if self.df is None or self.df.empty:
             QMessageBox.warning(self, "Train", "Load data first.")
             return
-            
-        features_to_use = list(self.active_features.keys())
-        if not features_to_use:
-            QMessageBox.warning(self, "Train", "Add at least one feature (e.g. RSI) to train the model on.")
+        if not self.current_strategy:
+            QMessageBox.warning(self, "Train", "Load a strategy workspace first.")
             return
 
-        script_instance = self.strategy.get_script_instance()
-        if not script_instance:
-            QMessageBox.warning(self, "Train", "Could not load the strategy script.")
-            return
-            
-        # Merge Signal Parameters from the separate panel into settings
-        signal_params = self.models_panel.get_values()
-        settings.update(signal_params)
-        
-        if hasattr(script_instance, 'features_to_use'):
-            script_instance.features_to_use = features_to_use
-        
+        ticker = self.controls.ticker_input.text().upper()
+        interval = self.controls.interval_combo.currentText()
+        period = self.controls.period_combo.currentText()
+        start = self._period_to_start(period)
+        end = datetime.utcnow().strftime("%Y-%m-%d")
+
         self.training_panel.btn_train.setEnabled(False)
-        self.training_panel.progress_bar.setValue(10)
-        self.training_panel.log("Initializing multi-ticker training thread...")
-        
-        # Start Thread with new signature
-        self.training_thread = TrainingThread(
-            script_instance, 
-            self.engine, 
-            self.active_features, 
-            settings,
-            self.controls.ticker_input.text().upper(),
-            self.controls.interval_combo.currentText()
-        )
-        self.training_thread.finished.connect(lambda w, m: self._on_training_finished(w, m, settings, features_to_use))
-        self.training_thread.error.connect(self._on_training_error)
-        self.training_thread.log.connect(self.training_panel.log)
-        self.training_thread.start()
+        self.training_panel.progress_bar.setValue(0)
+        self.training_panel.log(f"Starting training for '{self.current_strategy}'...")
 
-    def _on_training_finished(self, model_weights, metrics, settings, features_to_use):
+        self._worker = EngineWorker(
+            self.engine.run_training,
+            self.current_strategy,
+            [ticker],
+            {"start": start, "end": end, "interval": interval},
+        )
+        self._worker.progress.connect(lambda p, m: self.training_panel.progress_bar.setValue(p))
+        self._worker.log_msg.connect(self.training_panel.log)
+        self._worker.finished.connect(self._on_training_finished)
+        self._worker.error.connect(self._on_training_error)
+        self._worker.start()
+
+    def _on_training_finished(self, result):
         self.training_panel.btn_train.setEnabled(True)
         self.training_panel.progress_bar.setValue(100)
-        self.training_panel.log(f"Final Accuracy: {metrics.get('accuracy',0):.2%}, Samples: {metrics.get('samples', 0)}")
-        
-        # Save to strategy
-        model_id = str(uuid.uuid4())[:8]
-        self.strategy.model_instances[model_id] = {
-            "weights": model_weights,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "comment": f"{settings.get('model_type')} ({metrics.get('accuracy',0):.0%})",
-            "settings": settings,
-            "training_scope": {
-                "mode": settings.get("ticker_mode"),
-                "tickers": settings.get("ticker_list") if settings.get("ticker_mode") == "Custom Basket" else "Random" if settings.get("ticker_mode") == "Random Selection" else self.controls.ticker_input.text().upper(),
-                "interval": self.controls.interval_combo.currentText(),
-                "features": features_to_use,
-                "samples": metrics.get('samples', 0)
-            },
-            "metrics": metrics
-        }
-        
-        # Auto-set active if it's the first one
-        if not self.strategy.active_model_id:
-            self.strategy.active_model_id = model_id
-            
-        self.strategy.save()
-        self.signals_panel.refresh_models(self.strategy.model_instances, self.strategy.active_model_id, self.active_features.keys())
-        self._refresh_score_underlay()
+        self.training_panel.log(f"Training complete: {result}")
+        self.signals_panel.refresh_models({}, None, self.active_features.keys())
 
     def _on_training_error(self, err_msg):
         self.training_panel.btn_train.setEnabled(True)
@@ -903,116 +592,97 @@ class ChartWindow(QMainWindow):
         if self.df is None or self.df.empty:
             QMessageBox.warning(self, "Signals", "Load data first.")
             return
+        if not self.current_strategy:
+            QMessageBox.warning(self, "Signals", "Load a strategy workspace first.")
+            return
 
-        try:
-            # preview the ACTIVE strategy (one in the dock), sync it first
-            self._sync_active_strategy()
-            self.strategy.save()
-            strategy = self.strategy
-            
-            # 1. Compute all features required by this strategy
-            all_feature_data = {"Volume": self.df['Volume']}
-            if not strategy.feature_config:
-                QMessageBox.warning(self, "Signals", f"Strategy '{strategy.name}' has no saved features. Add RSI/ATR to the Features panel and save the strategy.")
-                return
+        ticker = self.controls.ticker_input.text().upper()
+        interval = self.controls.interval_combo.currentText()
+        period = self.controls.period_combo.currentText()
+        start = self._period_to_start(period)
+        end = datetime.utcnow().strftime("%Y-%m-%d")
 
-            for feat_name, params in strategy.feature_config.items():
-                if feat_name in self.available_features:
-                    feat = self.available_features[feat_name]
-                    result = feat.compute(self.df, params)
-                    if isinstance(result, FeatureResult):
-                         if result.data: all_feature_data.update(result.data)
-                    elif hasattr(result, 'data'):
-                         if result.data: all_feature_data.update(result.data)
+        self._worker = EngineWorker(
+            self.engine.run_backtest,
+            self.current_strategy,
+            [ticker],
+            {"start": start, "end": end, "interval": interval},
+        )
+        self._worker.finished.connect(lambda result: self._on_backtest_finished(result, ticker))
+        self._worker.error.connect(lambda e: QMessageBox.critical(self, "Error", f"Signal generation failed: {e}"))
+        self._worker.start()
 
-            # 2. Run the signal script
-            model_instance = strategy.get_script_instance()
-            if not model_instance:
-                raise Exception("Could not load script instance.")
-            
-            model_instance.model_instances = strategy.model_instances
-            model_instance.active_model_id = strategy.active_model_id
-            # Inject current Signal Parameters from UI
-            model_instance.params = self.models_panel.get_values()
-            
-            # Sync score panel with available functions
-            self._sync_score_panel()
-            
-            raw_signals = model_instance.generate_signals(self.df, all_feature_data)
-            self.clear_score_cache() # New signals invalidate scores
+    def _on_backtest_finished(self, result, ticker):
+        if result.get("cancelled"):
+            return
 
-            # Convert Series to Events for the legacy logic
-            events = []
-            signal_indices = raw_signals[raw_signals != 0].index
-            for idx in signal_indices:
-                iloc = self.df.index.get_loc(idx)
-                val = raw_signals[idx]
-                side = 'buy' if val == 1 else 'sell' if val == -1 else 'neutral' if val == 2 else 'unknown'
-                if side == 'unknown': continue
-                events.append(SignalEvent(name=f"{strategy.name}_Signal", index=iloc, timestamp=idx, value=self.df['Close'].iloc[iloc], side=side, description=f"Strategy Signal ({side})"))
+        raw_signals = result.get("signals", {}).get(ticker)
+        if raw_signals is None or raw_signals.empty:
+            QMessageBox.information(self, "Signals", "No signals generated.")
+            return
 
-            # 3. Display on charts
-            # Clear old signals from main plot
-            for item in self.signal_items:
-                self.main_plot.removeItem(item)
-            self.signal_items = []
+        # Align signals onto self.df index
+        raw_signals = raw_signals.reindex(self.df.index, fill_value=0.0)
+        self.clear_score_cache()
 
-            # Clear existing score subplot if it exists to keep UI clean
-            if self.score_plot_widget:
-                self.score_plot_widget.deleteLater()
-                self.score_plot = None
-                self.score_plot_widget = None
-                self._reorganize_subplots()
+        # Convert Series values to SignalEvents
+        events = []
+        for idx in raw_signals[raw_signals != 0].index:
+            iloc = self.df.index.get_loc(idx)
+            val = raw_signals[idx]
+            side = 'buy' if val > 0 else 'sell'
+            close_col = 'Close' if 'Close' in self.df.columns else 'close'
+            events.append(SignalEvent(
+                name=f"{self.current_strategy}_Signal",
+                index=iloc, timestamp=idx,
+                value=self.df[close_col].iloc[iloc],
+                side=side,
+                description=f"Strategy Signal ({side})",
+            ))
 
-            # Create grouped scatter items for better performance and hover handling
-            scatter_configs = {
-                'buy': {'color': '#00ff00', 'sym': 't1', 'size': 15},
-                'sell': {'color': '#ff4444', 'sym': 't', 'size': 15},
-                'neutral': {'color': '#ffff00', 'sym': 'o', 'size': 10}
-            }
-            
-            main_scatters = {}
-            for side, cfg in scatter_configs.items():
-                s = pg.ScatterPlotItem(
-                    symbol=cfg['sym'], size=cfg['size'], 
-                    brush=pg.mkBrush(cfg['color']),
-                    pen=pg.mkPen(cfg['color'], width=1),
-                    hoverable=True,
-                    tip=None # We will use custom tooltip
-                )
-                s.sigHovered.connect(self.on_signal_hovered)
-                self.main_plot.addItem(s)
-                self.signal_items.append(s)
-                main_scatters[side] = s
+        # Clear old signals
+        for item in self.signal_items:
+            self.main_plot.removeItem(item)
+        self.signal_items = []
 
-            # Calculate a sensible vertical offset (e.g., 2% of the visible range or average volatility)
-            price_range = self.df['High'].max() - self.df['Low'].min()
-            offset = price_range * 0.03 # 3% of the total price range
+        if self.score_plot_widget:
+            self.score_plot_widget.deleteLater()
+            self.score_plot = None
+            self.score_plot_widget = None
+            self._reorganize_subplots()
 
-            for e in events:
-                if e.side in main_scatters:
-                    # Determine vertical position based on side
-                    row = self.df.iloc[e.index]
-                    if e.side == 'buy':
-                        pos_y = row['Low'] - offset
-                    elif e.side == 'sell':
-                        pos_y = row['High'] + offset
-                    else:
-                        pos_y = e.value # Neutral/Unknown
+        scatter_configs = {
+            'buy':  {'color': '#00ff00', 'sym': 't1', 'size': 15},
+            'sell': {'color': '#ff4444', 'sym': 't',  'size': 15},
+        }
+        scatters = {}
+        for side, cfg in scatter_configs.items():
+            s = pg.ScatterPlotItem(
+                symbol=cfg['sym'], size=cfg['size'],
+                brush=pg.mkBrush(cfg['color']),
+                pen=pg.mkPen(cfg['color'], width=1),
+                hoverable=True, tip=None,
+            )
+            s.sigHovered.connect(self.on_signal_hovered)
+            self.main_plot.addItem(s)
+            self.signal_items.append(s)
+            scatters[side] = s
 
-                    # Add to main plot scatter
-                    main_scatters[e.side].addPoints([{
-                        'pos': (e.index, pos_y),
-                        'data': e # Attach the event object to the point
-                    }])
-                
-            QMessageBox.information(self, "Signals", f"Generated {len(events)} signals from strategy '{strategy.name}'.")
-            self._refresh_score_underlay()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to run signals: {e}")
-            import traceback
-            traceback.print_exc()
+        high_col = 'High' if 'High' in self.df.columns else 'high'
+        low_col  = 'Low'  if 'Low'  in self.df.columns else 'low'
+        price_range = self.df[high_col].max() - self.df[low_col].min()
+        offset = price_range * 0.03
+
+        for e in events:
+            if e.side in scatters:
+                row = self.df.iloc[e.index]
+                pos_y = row[low_col] - offset if e.side == 'buy' else row[high_col] + offset
+                scatters[e.side].addPoints([{'pos': (e.index, pos_y), 'data': e}])
+
+        QMessageBox.information(self, "Signals",
+                                f"Generated {len(events)} signals for {ticker} "
+                                f"(strategy: {self.current_strategy}).")
+        self._refresh_score_underlay()
 
     def clear_score_cache(self):
         """Invalidates the score cache when data or features change."""
@@ -1025,92 +695,13 @@ class ChartWindow(QMainWindow):
             self.update_score_visualization(settings)
 
     def update_score_visualization(self, settings):
-        if self.df is None or self.df.empty: return
-        
         if not settings.get("active"):
             if self.score_overlay:
                 self.main_plot.remove_overlay(self.score_overlay)
                 self.score_overlay = None
                 self.score_label.hide()
-                self.main_plot.update_all(self.df)
-            return
-
-        func_name = settings.get("function")
-        if not func_name: return
-
-        force_refresh = settings.get("force_refresh", False)
-        params = settings.get("parameters", {})
-
-        # PERFORMANCE OPTIMIZATION:
-        # If we already have an overlay for THIS function, AND it is in cache, 
-        # just update its visuals (alpha/colors) without re-calculating anything.
-        if not force_refresh and self.score_overlay and \
-           getattr(self.score_overlay, 'func_name', None) == func_name and \
-           func_name in self.score_cache:
-            self.score_overlay.set_visuals(
-                pos_color=settings.get("pos_color"),
-                neg_color=settings.get("neg_color"),
-                alpha=settings.get("alpha")
-            )
-            return
-
-        # If it's a different function, forced refresh, or not in cache, we might need to calculate
-        try:
-            if not force_refresh and func_name in self.score_cache:
-                scores = self.score_cache[func_name]
-            else:
-                strategy = self.strategy
-                model_instance = strategy.get_script_instance()
-                
-                if not model_instance:
-                    print("Strategy script instance not found.")
-                    return
-                    
-                if not hasattr(model_instance, func_name):
-                    print(f"Strategy script has no function: {func_name}")
-                    return
-
-                # Pass model metadata to the script instance
-                model_instance.model_instances = strategy.model_instances
-                model_instance.active_model_id = strategy.active_model_id
-                # Inject current Signal Parameters from UI
-                model_instance.params = self.models_panel.get_values()
-
-                # Re-calculating signals for the current state to get fresh scores
-                all_feature_data = {"Volume": self.df['Volume']}
-                for feat_name, data in self.active_features.items():
-                    feat = data["instance"]
-                    f_params = {k: w.currentText() if isinstance(w, QComboBox) else w.isChecked() if isinstance(w, QCheckBox) else w.text() 
-                              for k, w in data["inputs"].items()}
-                    res = feat.compute(self.df, f_params)
-                    if isinstance(res, FeatureResult): all_feature_data.update(res.data)
-                    elif hasattr(res, 'data'): all_feature_data.update(res.data)
-
-                raw_signals = model_instance.generate_signals(self.df, all_feature_data)
-                
-                score_func = getattr(model_instance, func_name)
-                # Call score_func with dynamic parameters
-                scores = score_func(self.df, raw_signals, **params)
-                self.score_cache[func_name] = scores
-
-            if self.score_overlay:
-                self.main_plot.remove_overlay(self.score_overlay)
-
-            self.score_overlay = ScoreOverlay(
-                scores, 
-                pos_color=settings.get("pos_color"),
-                neg_color=settings.get("neg_color"),
-                alpha=settings.get("alpha")
-            )
-            self.score_overlay.func_name = func_name # Tag it for the optimization above
-            self.main_plot.add_overlay(self.score_overlay)
-            self.main_plot.update_all(self.df)
-            print("DEBUG: Overlay added and plot updated")
-
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"Error updating score visualization: {e}")
+                if self.df is not None:
+                    self.main_plot.update_all(self.df)
 
     def on_signal_hovered(self, scatter, points):
         from PyQt6.QtWidgets import QToolTip
@@ -1135,26 +726,50 @@ class ChartWindow(QMainWindow):
         self.load_chart()
 
     def load_random(self):
-        tickers = self.db.get_all_tickers() or ["AAPL", "MSFT", "GOOGL"]
-        ticker = random.choice(tickers)
+        try:
+            tickers = self.engine.list_cached_tickers()
+        except Exception:
+            tickers = []
+        ticker = random.choice(tickers) if tickers else random.choice(["AAPL", "MSFT", "GOOGL"])
         self.controls.ticker_input.setText(ticker)
         self.load_chart()
+
+    @staticmethod
+    def _period_to_start(period: str) -> str:
+        """Convert a period string (e.g. '1y') to an ISO-8601 start date."""
+        mapping = {
+            "1mo": timedelta(days=30),
+            "3mo": timedelta(days=90),
+            "6mo": timedelta(days=180),
+            "1y":  timedelta(days=365),
+            "2y":  timedelta(days=730),
+            "5y":  timedelta(days=1825),
+            "10y": timedelta(days=3650),
+            "max": timedelta(days=7300),
+        }
+        delta = mapping.get(period, timedelta(days=365))
+        return (datetime.utcnow() - delta).strftime("%Y-%m-%d")
 
     def load_chart(self):
         ticker = self.controls.ticker_input.text().upper()
         interval = self.controls.interval_combo.currentText()
         period = self.controls.period_combo.currentText()
+        start = self._period_to_start(period)
+        end = datetime.utcnow().strftime("%Y-%m-%d")
 
-        # Automatically pull new data from yfinance
         try:
-            self.engine.sync_data(ticker, interval, period=period)
+            df = self.engine.get_historical_data(ticker, interval, start, end)
         except Exception as e:
-            print(f"Error syncing data: {e}")
-
-        self.df = self.db.get_data(ticker, interval)
-        if self.df is None or self.df.empty:
-            QMessageBox.warning(self, "Load Data", f"No data found for {ticker} ({interval}) even after sync attempt.")
+            QMessageBox.warning(self, "Load Data", f"Failed to fetch {ticker}: {e}")
             return
+
+        if df is None or df.empty:
+            QMessageBox.warning(self, "Load Data", f"No data found for {ticker} ({interval}).")
+            return
+
+        # Normalize column names: DataBroker returns lowercase, chart code expects Title-case
+        df.columns = [c.capitalize() for c in df.columns]
+        self.df = df
             
         self.controls.add_to_history(ticker)
 

@@ -1,7 +1,6 @@
-from typing import Dict, Any, List
+from typing import Dict, Any
 import pandas as pd
-import numpy as np
-from .base import Feature, FeatureOutput, LineOutput
+from .base import Feature, FeatureResult
 
 class AnchoredVWAP(Feature):
     @property
@@ -19,13 +18,11 @@ class AnchoredVWAP(Feature):
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
-            "anchor_bars_back": 100, # How many bars back to start
-            "color": "#00d8ff"
+            "anchor_bars_back": 100
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         bars_back = int(params.get("anchor_bars_back", 100))
-        color = params.get("color", "#00d8ff")
         
         if bars_back >= len(df):
             start_idx = 0
@@ -46,14 +43,8 @@ class AnchoredVWAP(Feature):
         
         vwap_slice = cum_v_tp / cum_vol
         
-        # Prepare full-length array with None before anchor
-        vwap_full = [None] * start_idx + vwap_slice.tolist()
+        # Create full series aligned with df.index
+        vwap_series = pd.Series(index=df.index, dtype=float)
+        vwap_series.iloc[start_idx:] = vwap_slice
         
-        return [
-            LineOutput(
-                name=f"AVWAP ({bars_back})",
-                data=vwap_full,
-                color=color,
-                width=2
-            )
-        ]
+        return FeatureResult(data={f"AVWAP_{bars_back}": vwap_series})

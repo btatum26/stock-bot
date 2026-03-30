@@ -1,0 +1,92 @@
+services:
+  # ---------------------------------------------------------------------------
+  # THE BROKER: Redis
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: research_redis
+    # Persistent storage: Saves the queue and job state every 60 seconds 
+    # if at least 1 change occurred.
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - research_net
+    restart: unless-stopped
+
+# ---------------------------------------------------------------------------
+  # THE GATEWAY: FastAPI (Container A)
+  # ---------------------------------------------------------------------------
+  api:
+    build: .
+    container_name: research_api
+    command: uv run uvicorn src.daemon.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+    volumes:
+      - .:/app           # <-- Mounts your entire project directory
+      - /app/.venv       # <-- Protects the container's virtual environment
+      # (You no longer need the separate data/exports/logs mounts 
+      # since .:/app covers the whole directory, but keeping them won't hurt)
+    depends_on:
+      - redis
+    networks:
+      - research_net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # THE EXECUTION: RQ Worker (Container B)
+  # ---------------------------------------------------------------------------
+  worker:
+    build: .
+    container_name: research_worker
+    command: uv run python -m src.daemon.worker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+    volumes:
+      - .:/app           # <-- Mounts your entire project directory
+      - /app/.venv       # <-- Protects the container's virtual environment
+    depends_on:
+      - redis
+    networks:
+      - research_net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Testing with pytest
+  # ---------------------------------------------------------------------------
+  pytest:
+    profiles: ["test"]
+    build:
+      context: .
+      args:
+        - UV_INSTALL_ARGS= # Forces uv to install dev dependencies
+      dockerfile: Dockerfile 
+    container_name: research_tester
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+      - TEST_MODE=true
+    volumes:
+      - .:/app
+      - /app/.venv 
+      - ./data:/app/data
+    depends_on:
+      - redis
+    # CHANGED: Keep the container alive indefinitely
+    command: sleep infinity
+
+networks:
+  research_net:
+    driver: bridge
+
+volumes:
+  redis_data:

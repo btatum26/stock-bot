@@ -1,0 +1,29 @@
+# AUTO-GENERATED FILE. DO NOT MODIFY DIRECTLY.
+from dataclasses import dataclass, field
+
+@dataclass(frozen=True)
+class FeaturesContext:
+    """Strictly typed mapping of strategy features to DataFrame columns."""
+{% for f in features %}
+    {{ f.attr_name }}: str = '{{ f.col_name }}'
+    """
+    {{ f.docstring | indent(4) }}
+    """
+{% else %}
+    pass
+{% endfor %}
+
+@dataclass(frozen=True)
+class ParamsContext:
+    """Strictly typed strategy hyperparameters defined in manifest.json."""
+{% for p in params %}
+    {{ p.name }}: {{ p.type }} = {{ p.value }}
+{% else %}
+    pass
+{% endfor %}
+
+@dataclass(frozen=True)
+class Context:
+    """Master strategy context object."""
+    features: FeaturesContext = field(default_factory=FeaturesContext)
+    params: ParamsContext = field(default_factory=ParamsContext)

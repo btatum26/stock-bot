@@ -1,7 +1,7 @@
-from typing import Dict, Any, List
+from typing import Dict, Any
 import pandas as pd
 import numpy as np
-from .base import Feature, FeatureOutput, MarkerOutput
+from .base import Feature, FeatureResult
 
 class CandlePatterns(Feature):
     @property
@@ -23,7 +23,7 @@ class CandlePatterns(Feature):
             "hammer_ratio": 2.0 # Lower wick > 2x body
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         doji_thresh = float(params.get("doji_threshold", 0.1))
         hammer_ratio = float(params.get("hammer_ratio", 2.0))
         
@@ -43,25 +43,7 @@ class CandlePatterns(Feature):
         upper_wick = high_p - np.maximum(open_p, close_p)
         is_hammer = (lower_wick >= (body * hammer_ratio)) & (upper_wick <= (body * 0.5))
         
-        doji_indices = np.where(is_doji)[0].tolist()
-        doji_prices = df['High'].iloc[doji_indices] * 1.001 # Slightly above
-        
-        hammer_indices = np.where(is_hammer)[0].tolist()
-        hammer_prices = df['Low'].iloc[hammer_indices] * 0.999 # Slightly below
-        
-        return [
-            MarkerOutput(
-                name="Doji",
-                indices=doji_indices,
-                values=doji_prices.tolist(),
-                shape='d', # diamond
-                color='#ffff00'
-            ),
-            MarkerOutput(
-                name="Hammer",
-                indices=hammer_indices,
-                values=hammer_prices.tolist(),
-                shape='t', # triangle up (t1 in pyqtgraph usually, checking map)
-                color='#00ff00'
-            )
-        ]
+        return FeatureResult(data={
+            "Is_Doji": is_doji.astype(int),
+            "Is_Hammer": is_hammer.astype(int)
+        })

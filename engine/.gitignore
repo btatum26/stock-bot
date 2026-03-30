@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+.venv/
+.env
+
+# Project Specific
+plans/
+data/
+*.db
+
+# Gemini / AI Agents
+.gemini/
+.geminiignore
+GEMINI.md
+.claudeignore
+CLAUDE.md
+.claude/
+
+logs/
+exports/

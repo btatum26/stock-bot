@@ -1,6 +1,6 @@
-from typing import Dict, Any, List
+from typing import Dict, Any
 import pandas as pd
-from .base import Feature, FeatureOutput, LineOutput
+from .base import Feature, FeatureResult
 
 class BollingerBands(Feature):
     @property
@@ -19,29 +19,21 @@ class BollingerBands(Feature):
     def parameters(self) -> Dict[str, Any]:
         return {
             "period": 20,
-            "std_dev": 2.0,
-            "color_upper": "#00ff00",
-            "color_lower": "#ff0000",
-            "color_mid": "#ffffff"
+            "std_dev": 2.0
         }
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> List[FeatureOutput]:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> FeatureResult:
         period = int(params.get("period", 20))
         std_multiplier = float(params.get("std_dev", 2.0))
         
-        # Calculate
         sma = df['Close'].rolling(window=period).mean()
         std = df['Close'].rolling(window=period).std()
         
         upper = sma + (std * std_multiplier)
         lower = sma - (std * std_multiplier)
         
-        # Helper to clean NaNs
-        def clean(series):
-            return series.where(pd.notnull(series), None).tolist()
-
-        return [
-            LineOutput(name="Upper Band", data=clean(upper), color=params.get("color_upper"), width=1),
-            LineOutput(name="Lower Band", data=clean(lower), color=params.get("color_lower"), width=1),
-            LineOutput(name="Mid Band", data=clean(sma), color=params.get("color_mid"), width=1)
-        ]
+        return FeatureResult(data={
+            f"BB_Upper_{period}_{std_multiplier}": upper,
+            f"BB_Lower_{period}_{std_multiplier}": lower,
+            f"BB_Mid_{period}": sma
+        })
