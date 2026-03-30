@@ -5,7 +5,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: research_redis
-    # Persistent storage: Saves the queue and job state every 60 seconds 
+    # Persistent storage: Saves the queue and job state every 60 seconds
     # if at least 1 change occurred.
     command: redis-server --save 60 1 --loglevel warning
     ports:
@@ -22,19 +22,18 @@ services:
   api:
     build: .
     container_name: research_api
-    command: uv run uvicorn src.daemon.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uv run uvicorn daemon.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - PYTHONPATH=/app
+      - PYTHONPATH=/code
+    working_dir: /code/engine
     volumes:
-      - .:/app           # <-- Mounts your entire project directory
-      - /app/.venv       # <-- Protects the container's virtual environment
-      # (You no longer need the separate data/exports/logs mounts 
-      # since .:/app covers the whole directory, but keeping them won't hurt)
+      - .:/code/engine
+      - /code/engine/.venv
     depends_on:
       - redis
     networks:
@@ -47,13 +46,14 @@ services:
   worker:
     build: .
     container_name: research_worker
-    command: uv run python -m src.daemon.worker
+    command: uv run python -m daemon.worker
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - PYTHONPATH=/app
+      - PYTHONPATH=/code
+    working_dir: /code/engine
     volumes:
-      - .:/app           # <-- Mounts your entire project directory
-      - /app/.venv       # <-- Protects the container's virtual environment
+      - .:/code/engine
+      - /code/engine/.venv
     depends_on:
       - redis
     networks:
@@ -69,19 +69,20 @@ services:
       context: .
       args:
         - UV_INSTALL_ARGS= # Forces uv to install dev dependencies
-      dockerfile: Dockerfile 
+      dockerfile: Dockerfile
     container_name: research_tester
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - PYTHONPATH=/app
+      - PYTHONPATH=/code
       - TEST_MODE=true
+    working_dir: /code/engine
     volumes:
-      - .:/app
-      - /app/.venv 
-      - ./data:/app/data
+      - .:/code/engine
+      - /code/engine/.venv
+      - ./data:/code/engine/data
     depends_on:
       - redis
-    # CHANGED: Keep the container alive indefinitely
+    # Keep the container alive indefinitely
     command: sleep infinity
 
 networks:

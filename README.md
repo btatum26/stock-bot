@@ -1,75 +1,109 @@
 # Stock Bot Pro
 
-A quantitative analysis and strategy development platform designed for market data visualization, feature engineering, and machine learning model integration.
+A quantitative finance platform for market visualization, strategy development, backtesting, and optimization.
 
-## Core Capabilities
+## Overview
 
-### Visualization and Interaction
-* High-performance candlestick charting using PyQt6 and pyqtgraph.
-* Integrated volume overlays and dynamic crosshair tracking.
-* Synchronized multi-pane layouts for secondary technical indicators.
-* Rich metadata tooltips for signal events and trade markers.
+The project has two layers that work together:
 
-### Feature Engineering
-* Dynamic technical indicator system (RSI, ATR, Moving Averages, Support/Resistance).
-* Real-time parameter tuning with immediate visual feedback.
-* Modular architecture for adding custom technical features.
+- **GUI** (`src/`, `stock_bot.py`) — PyQt6 desktop app for charting, indicator overlays, and visual signal exploration
+- **Research Engine** (`engine/`) — FastAPI + Redis/RQ backend for systematic strategy backtesting, hyperparameter optimization, and signal generation
 
-### Strategy and Machine Learning
-* Python-based strategy scripting for signal generation and custom scoring logic.
-* In-application model training using custom ticker baskets or randomized data slices.
-* Visual scoring underlays to map strategy outputs directly onto price charts.
-* Persistent model management for comparing multiple trained instances per strategy.
+The GUI connects to the engine via the `ModelEngine` facade class. The engine can also run standalone via CLI or as a Docker service.
 
-### Data Management
-* SQLite-backed local persistence for fast historical data access.
-* Automated synchronization with Yahoo Finance for data retrieval and gap filling.
-* Strategy serialization (.strat files) to preserve workspace configurations, features, and models.
+## Quick Start
 
-## Technical Stack
-* Interface: PyQt6
-* Charting: pyqtgraph
-* Data: Pandas, NumPy, SQLAlchemy (SQLite)
-* Ingestion: yfinance
-* Environment: Python 3.13+ managed via uv
-
-## Installation
-
-Ensure the `uv` package manager is installed on your system.
-
-1. Clone the repository.
-2. Initialize the environment:
-   ```bash
-   uv sync
-   ```
-
-## Usage
-
-### GUI Application
-The primary interface for charting and strategy development.
+### Desktop Application
 ```bash
+uv sync
 uv run python stock_bot.py
 ```
 
-### CLI Operations
-For backend data management and maintenance tasks.
+### Research Engine (CLI)
 ```bash
-# Synchronize data for a specific ticker
-uv run python CLI.py --mode sync --ticker AAPL --interval 1d --period 10y
+cd engine
+uv sync
 
-# Bulk synchronize the top 1000 market companies
-uv run python CLI.py --mode bulk_sync --period 5y
+# Backtest a strategy
+uv run python main.py BACKTEST --strategy rsi_divergence --ticker AAPL --interval 1d
 
-# Clean duplicate database records
-uv run python CLI.py --mode clean
+# Optimize hyperparameters
+uv run python main.py TRAIN --strategy rsi_divergence --ticker AAPL --interval 1d
+
+# Generate latest signal
+uv run python main.py SIGNAL --strategy rsi_divergence --ticker AAPL
 ```
 
+### Research Engine (Docker — full stack)
+```bash
+cd engine
+docker compose up -d          # starts Redis + FastAPI + RQ Worker
+docker compose logs -f        # tail logs
+docker compose down           # stop
+```
+
+## Strategy Development
+
+Strategies live in `engine/strategies/<name>/` and follow a three-file contract:
+
+1. **`manifest.json`** — declare which features you need and what hyperparameters exist
+2. **`context.py`** — auto-generated typed dataclass from the manifest (never edit manually)
+3. **`model.py`** — your logic: implement `generate_signals()` returning a `pd.Series` in `[-1.0, 1.0]`
+
+Scaffold a new strategy:
+```bash
+cd engine
+uv run python main.py INIT --strategy my_strategy
+# edit engine/strategies/my_strategy/model.py
+uv run python main.py BACKTEST --strategy my_strategy --ticker SPY --interval 1d
+```
+
+After changing `manifest.json`, regenerate the context:
+```bash
+uv run python main.py SYNC --strategy my_strategy
+```
+
+## Technical Stack
+
+| Layer | Technology |
+|---|---|
+| GUI | PyQt6, pyqtgraph |
+| Data | Pandas, NumPy, SQLAlchemy (SQLite), yfinance |
+| API | FastAPI, uvicorn |
+| Job queue | Redis, RQ |
+| Optimization | Optuna, CPCV (Combinatorial Purged Cross-Validation) |
+| ML | scikit-learn, XGBoost, SciPy |
+| Environment | Python 3.13+, uv |
+
 ## Project Structure
-* `stock_bot.py`: Main entry point for the desktop application.
-* `CLI.py`: Command-line interface for data operations.
-* `src/`: Core logic including the GUI orchestration, engine, and feature loaders.
-* `src/gui_components/`: Modular UI elements for plots and control panels.
-* `src/features/`: Implementations of technical indicators.
-* `src/signals/`: Base classes for rule-based and machine learning signal models.
-* `strategies/`: User strategy scripts and saved configuration files.
-* `data/`: Local storage for the SQLite market database.
+
+```
+stock_bot/
+├── stock_bot.py              # GUI entry point
+├── CLI.py                    # legacy data-sync CLI (bulk yfinance downloads)
+├── src/
+│   ├── gui.py                # ChartWindow (main PyQt6 app)
+│   ├── gui_components/       # modular UI panels (charts, controls, signals)
+│   ├── features/             # indicator implementations for GUI overlays
+│   └── signals/              # signal event models
+├── engine/                   # research engine (separate package: model-engine)
+│   ├── __init__.py           # ModelEngine facade + public API
+│   ├── main.py               # CLI entry point
+│   ├── core/                 # backtester, controller, features, metrics, workspace
+│   ├── daemon/               # FastAPI server + RQ worker
+│   ├── strategies/           # user strategy workspaces
+│   └── tests/                # pytest suite (run via Docker)
+└── data/                     # SQLite market database
+```
+
+## Installation
+
+Requires [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone <repo>
+cd stock_bot
+uv sync           # installs GUI + engine deps
+```
+
+For the Docker stack, also install [Docker Desktop](https://www.docker.com/products/docker-desktop/).

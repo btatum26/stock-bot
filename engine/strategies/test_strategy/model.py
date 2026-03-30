@@ -1,7 +1,7 @@
 
 import numpy as np
 import pandas as pd
-from engine.core.controller import SignalModel
+from engine.core.controller import SignalModel  # noqa: F401 (imported for dynamic strategy loading)
 
 class TestStrategy(SignalModel):
     def train(self, df, context, params):

@@ -1,15 +1,15 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/engine"]
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["engine*"]
 
 [project]
 name = "model-engine"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Financial strategy backtesting and optimization engine"
 requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.18.4",
