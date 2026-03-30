@@ -2,12 +2,12 @@ import importlib
 import pkgutil
 import inspect
 from .base import Feature
-import src.features
+import gui.features
 
 def load_features():
     features = {}
-    path = src.features.__path__
-    prefix = src.features.__name__ + "."
+    path = gui.features.__path__
+    prefix = gui.features.__name__ + "."
 
     for _, name, _ in pkgutil.iter_modules(path, prefix):
         try:

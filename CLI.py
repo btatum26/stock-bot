@@ -1,8 +1,8 @@
 import argparse
 import sys
 import pandas as pd
-from src.engine import TradingEngine, Strategy
-from src.snapshot import DataSnapshot
+from gui.engine import TradingEngine, Strategy
+from gui.snapshot import DataSnapshot
 
 # Import utilities
 from utils.clean_db import clean_db

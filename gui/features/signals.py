@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
-from src.signals.base import SignalEvent
+from gui.signals.base import SignalEvent
 
 class SignalEngine:
     """
