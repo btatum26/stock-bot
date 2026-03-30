@@ -24,3 +24,30 @@ feature_sets/
 # src/gui.py
 test_levels.py
 extract_tickers.py
+
+
+# Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+.venv/
+.env
+
+# Project Specific
+plans/
+data/
+*.db
+
+# Gemini / AI Agents
+.gemini/
+.geminiignore
+GEMINI.md
+.claudeignore
+CLAUDE.md
+.claude/
+
+logs/
+exports/
+
+yfinance.cache
