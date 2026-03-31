@@ -31,10 +31,35 @@ class DataBroker:
             result = session.execute(stmt).first()
             return result[0], result[1]
 
+    # Yahoo Finance hard limits on how far back each interval can reach
+    _YF_MAX_HISTORY: dict = {
+        '1m':  timedelta(days=7),
+        '2m':  timedelta(days=60),
+        '5m':  timedelta(days=60),
+        '15m': timedelta(days=60),
+        '30m': timedelta(days=60),
+        '60m': timedelta(days=730),
+        '1h':  timedelta(days=730),
+        '90m': timedelta(days=60),
+    }
+
     def get_data(self, ticker: str, interval: str, start: datetime, end: datetime) -> pd.DataFrame:
         """The primary interface for the strategy engine."""
-        
+
+        # Clamp start date to Yahoo Finance's per-interval history limit
+        max_lookback = self._YF_MAX_HISTORY.get(interval)
+        if max_lookback is not None:
+            earliest_allowed = end - max_lookback
+            if start < earliest_allowed:
+                start = earliest_allowed
+
         padded_start = self._get_padding(start, interval, periods=200)
+
+        # Re-apply the cap after padding (padding may push it back past the limit)
+        if max_lookback is not None:
+            earliest_allowed = end - max_lookback
+            if padded_start < earliest_allowed:
+                padded_start = earliest_allowed
 
         # 15-Minute Rule: Fetch directly, bypass DB
         if interval == '15m':

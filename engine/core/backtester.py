@@ -256,7 +256,7 @@ class LocalBacktester:
             for ticker, df_raw in datasets.items():
                 logger.info(f"Processing batch execution for {ticker}")
                 try:
-                    df_full, _, l_max = compute_all_features(df_raw, features_config)
+                    df_full, l_max = compute_all_features(df_raw, features_config)
                     
                     # Apply Universal Warmup Purge
                     df_clean = df_full.iloc[l_max:].copy()

@@ -19,7 +19,7 @@ from engine.core.features.base import (
     Pane,
     FEATURE_REGISTRY,
 )
-from engine.core.features.features import load_features as engine_load_features
+from engine.core.features.features import load_features as engine_load_features, FeatureCache
 
 from .base import (
     Feature as GUIFeature,
@@ -136,8 +136,9 @@ class AdaptedFeature(GUIFeature):
         engine_params = {k: v for k, v in params.items()
                          if k not in ("color",) and not k.startswith("color_")}
 
-        # Compute via engine
-        engine_result: EngineResult = self._engine.compute(df, engine_params)
+        # Compute via engine with a shared cache for dependency optimization
+        cache = FeatureCache()
+        engine_result: EngineResult = self._engine.compute(df, engine_params, cache)
 
         visuals = []
         line_color = params.get("color", _color_for_feature(self._engine))
