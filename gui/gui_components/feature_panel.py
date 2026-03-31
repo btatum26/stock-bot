@@ -35,7 +35,7 @@ class FeaturePanel(QWidget):
 
             for f in sorted(by_category[category], key=lambda x: x.name):
                 item = QStandardItem(f"    {f.name}")
-                item.setData(f.name)
+                item.setData(f.name, Qt.ItemDataRole.UserRole)
                 model.appendRow(item)
         
         main_layout.addWidget(QLabel("Add Feature:"))

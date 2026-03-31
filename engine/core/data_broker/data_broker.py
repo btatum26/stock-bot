@@ -12,11 +12,17 @@ class DataBroker:
         self.db = Database()
         self.fetcher = DataFetcher()
 
+    # Canonical interval names as stored in the DB (and as yfinance understands them)
+    _INTERVAL_ALIASES = {'1w': '1wk'}
+
+    def _normalize_interval(self, interval: str) -> str:
+        return self._INTERVAL_ALIASES.get(interval, interval)
+
     def _get_padding(self, start_date: datetime, interval: str, periods: int = 200) -> datetime:
         """Calculates rough calendar padding to ensure indicator warm-up."""
         if interval == '1d':
             return start_date - timedelta(days=periods * 1.4)
-        elif interval == '1wk':
+        elif interval in ('1wk', '1w'):
             return start_date - timedelta(weeks=periods)
         elif interval == '4h':
             return start_date - timedelta(days=(periods / 2))
@@ -51,6 +57,9 @@ class DataBroker:
                  end: Optional[datetime] = None) -> pd.DataFrame:
         """The primary interface for the strategy engine.
 
+        Interval aliases (e.g. '1w' → '1wk') are resolved here so all DB
+        queries, yfinance calls, and cache logic use a single canonical key.
+
         For daily/weekly intervals, start is ignored — all available history is
         fetched and cached, then the full dataset is returned so the GUI can
         control the view window independently.
@@ -58,6 +67,8 @@ class DataBroker:
         For intraday intervals with Yahoo history limits, start is clamped to
         the maximum allowed lookback.
         """
+        interval = self._normalize_interval(interval)
+
         if end is None:
             end = datetime.utcnow()
 

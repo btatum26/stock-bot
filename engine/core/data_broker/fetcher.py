@@ -31,7 +31,8 @@ class DataFetcher:
     def fetch_ohlcv(self, ticker: str, interval: str, start: str, end: str) -> pd.DataFrame:
         """Fetches OHLCV data with backoff retries."""
         try:
-            yf_interval = interval if interval != '4h' else '1h' 
+            _INTERVAL_MAP = {'4h': '1h', '1w': '1wk'}
+            yf_interval = _INTERVAL_MAP.get(interval, interval)
             df = yf.download(ticker, start=start, end=end, interval=yf_interval, progress=False)
 
             if df.empty:
