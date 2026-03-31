@@ -6,6 +6,7 @@ __pycache__/
 env/
 venv/
 ENV/
+model_engine.egg-info/
 
 # Databases
 data/

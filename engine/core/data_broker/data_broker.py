@@ -43,30 +43,44 @@ class DataBroker:
         '90m': timedelta(days=60),
     }
 
-    def get_data(self, ticker: str, interval: str, start: datetime, end: datetime) -> pd.DataFrame:
-        """The primary interface for the strategy engine."""
+    # Earliest date to request from Yahoo for unlimited intervals (1d, 1wk).
+    # yfinance will simply return whatever data exists from this point forward.
+    _EPOCH_START = datetime(1900, 1, 1)
 
-        # Clamp start date to Yahoo Finance's per-interval history limit
+    def get_data(self, ticker: str, interval: str, start: Optional[datetime] = None,
+                 end: Optional[datetime] = None) -> pd.DataFrame:
+        """The primary interface for the strategy engine.
+
+        For daily/weekly intervals, start is ignored — all available history is
+        fetched and cached, then the full dataset is returned so the GUI can
+        control the view window independently.
+
+        For intraday intervals with Yahoo history limits, start is clamped to
+        the maximum allowed lookback.
+        """
+        if end is None:
+            end = datetime.utcnow()
+
+        # Clamp intraday start dates to Yahoo Finance's hard per-interval limits
         max_lookback = self._YF_MAX_HISTORY.get(interval)
         if max_lookback is not None:
-            earliest_allowed = end - max_lookback
-            if start < earliest_allowed:
-                start = earliest_allowed
+            # Intraday: honour the caller's start but don't exceed Yahoo's cap
+            if start is None:
+                start = end - max_lookback
+            else:
+                earliest_allowed = end - max_lookback
+                if start < earliest_allowed:
+                    start = earliest_allowed
+        else:
+            # Daily / weekly: always fetch full history
+            start = self._EPOCH_START
 
-        padded_start = self._get_padding(start, interval, periods=200)
-
-        # Re-apply the cap after padding (padding may push it back past the limit)
-        if max_lookback is not None:
-            earliest_allowed = end - max_lookback
-            if padded_start < earliest_allowed:
-                padded_start = earliest_allowed
-
-        # 15-Minute Rule: Fetch directly, bypass DB
+        # 15-Minute Rule: Fetch directly, bypass DB (too short-lived to cache)
         if interval == '15m':
             print(f"[{ticker}] 15m requested. Bypassing DB.")
             df = self.fetcher.fetch_ohlcv(
-                ticker, interval, 
-                start=padded_start.strftime('%Y-%m-%d'), 
+                ticker, interval,
+                start=start.strftime('%Y-%m-%d'),
                 end=(end + timedelta(days=1)).strftime('%Y-%m-%d')
             )
             if not df.empty:
@@ -74,50 +88,62 @@ class DataBroker:
             return df
 
         db_min, db_max = self._get_db_bounds(ticker, interval)
-        needs_fetch = False
 
-        if not db_min or not db_max:
-            needs_fetch = True
-            fetch_start, fetch_end = padded_start, end
-        elif padded_start < db_min or end > db_max:
-            needs_fetch = True
-            fetch_start, fetch_end = padded_start, end
+        # Fetch when: no cached data at all, history extends earlier than DB,
+        # or DB is stale (today's date is beyond the last cached bar).
+        today = datetime.utcnow().date()
+        db_max_date = db_max.date() if db_max else None
+        needs_fetch = (
+            not db_min or not db_max
+            or start < db_min
+            or db_max_date < today
+        )
 
         if needs_fetch:
             df_new = self.fetcher.fetch_ohlcv(
-                ticker, interval, 
-                start=fetch_start.strftime('%Y-%m-%d'), 
-                end=(fetch_end + timedelta(days=1)).strftime('%Y-%m-%d')
+                ticker, interval,
+                start=start.strftime('%Y-%m-%d'),
+                end=(end + timedelta(days=1)).strftime('%Y-%m-%d')
             )
-            
+
             if not df_new.empty:
                 df_new['ticker'] = ticker
                 df_new['interval'] = interval
                 records = df_new.to_dict('records')
-                
+
+                # SQLite limit: 999 bound parameters per statement.
+                # Each OHLCV row has 8 columns → max 124 rows per batch.
+                _COLS_PER_ROW = 8
+                _BATCH_SIZE = 999 // _COLS_PER_ROW  # 124
+
                 with Session(self.db.engine) as session:
                     try:
                         from sqlalchemy.dialects.sqlite import insert
-                        stmt = insert(OHLCV).values(records)
-                        stmt = stmt.on_conflict_do_nothing(index_elements=['ticker', 'timestamp', 'interval'])
-                        session.execute(stmt)
+                        for i in range(0, len(records), _BATCH_SIZE):
+                            batch = records[i:i + _BATCH_SIZE]
+                            stmt = insert(OHLCV).values(batch)
+                            stmt = stmt.on_conflict_do_nothing(index_elements=['ticker', 'timestamp', 'interval'])
+                            session.execute(stmt)
                         session.commit()
                         print(f"[{ticker}] Hydrated DB with {len(records)} new {interval} bars.")
                     except Exception as e:
                         session.rollback()
                         print(f"[{ticker}] DB Insert Failed: {e}")
 
-        # Serve from DB
+        # Serve the full cached dataset — no start filter for daily/weekly so
+        # the GUI can scroll back as far as history exists.
         with Session(self.db.engine) as session:
-            stmt = select(OHLCV).where(
+            where_clauses = [
                 OHLCV.ticker == ticker,
                 OHLCV.interval == interval,
-                OHLCV.timestamp >= padded_start,
-                OHLCV.timestamp <= end
-            ).order_by(OHLCV.timestamp.asc())
-            
+            ]
+            if max_lookback is not None:
+                # Intraday: still filter to the clamped window
+                where_clauses.append(OHLCV.timestamp >= start)
+            stmt = select(OHLCV).where(*where_clauses).order_by(OHLCV.timestamp.asc())
+
             df_final = pd.read_sql(stmt, session.bind)
             if not df_final.empty:
                 df_final.set_index('timestamp', inplace=True)
-                
+
         return df_final[['open', 'high', 'low', 'close', 'volume']]

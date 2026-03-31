@@ -14,6 +14,7 @@ from .metrics import Tearsheet
 from .optimization.optimizer_core import OptimizerCore
 from .logger import logger
 from .exceptions import StrategyError, ValidationError
+from .config import config
 
 class ExecutionMode(str, Enum):
     TRAIN = "TRAIN"
@@ -58,7 +59,7 @@ class SignalModel(ABC):
 class ApplicationController:
     """Orchestrates high-level system operations including data, workspace, and execution."""
     
-    def __init__(self, strategies_dir: str = "src/strategies"):
+    def __init__(self, strategies_dir: str = config.STRATEGIES_FOLDER):
         self.strategies_dir = strategies_dir
         self.broker = DataBroker()
 

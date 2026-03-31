@@ -1,11 +1,12 @@
 import sys
 import os
+import logging
 import pandas as pd
 import numpy as np
 import random
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, QCheckBox, QInputDialog, QMessageBox, QSplitter, QTabWidget, QScrollArea, QFrame, QHBoxLayout)
-from PyQt6.QtCore import Qt, QRectF, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, QThread, QTimer, pyqtSignal
 import pyqtgraph as pg
 
 from engine import ModelEngine
@@ -61,7 +62,7 @@ class ChartWindow(QMainWindow):
         self.resize(1400, 900)
         setup_app_style(self)
         
-        self.engine = ModelEngine(workspace_dir="strategies", db_path="data/stocks.db")
+        self.engine = ModelEngine(workspace_dir="./strategies", db_path="data/stocks.db")
         self.available_features = load_features()
         self.active_features = {}  # {name: {params, overlays, plot_item_ref}}
 
@@ -101,18 +102,26 @@ class ChartWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
         
+        # Debounce timer — fires load_chart 400 ms after the user stops typing
+        self._load_timer = QTimer(self)
+        self._load_timer.setSingleShot(True)
+        self._load_timer.timeout.connect(self.load_chart)
+
         # Header Controls
         self.controls = ControlBar(self)
         self.controls.ticker_input.returnPressed.connect(self.load_chart)
+        self.controls.ticker_input.textChanged.connect(lambda: self._load_timer.start(400))
         self.controls.ticker_history.currentIndexChanged.connect(self.load_from_history)
         self.controls.interval_combo.currentIndexChanged.connect(self.load_chart)
-        self.controls.btn_load.clicked.connect(self.load_chart)
+        # Period combo only adjusts the visible window, no re-fetch
+        self.controls.period_combo.currentIndexChanged.connect(self._apply_period_view)
         self.controls.btn_random.clicked.connect(self.load_random)
         
         # Connect Strategy Controls in Header
         self.controls.btn_save_strategy.clicked.connect(self.save_strategy)
         self.controls.btn_load_strategy.clicked.connect(self.load_strategy)
         self.controls.btn_rename_strategy.clicked.connect(self.rename_strategy)
+        self.controls.btn_new_strategy.clicked.connect(self.new_strategy)
         self.controls.lbl_strategy_name.setText("Strategy: (none)")
 
         left_layout.addWidget(self.controls)
@@ -515,6 +524,23 @@ class ChartWindow(QMainWindow):
             self._worker.wait(2000)
         event.accept()
 
+    def new_strategy(self):
+        name, ok = QInputDialog.getText(self, "New Strategy", "Strategy name (letters, digits, underscores):")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        try:
+            self.engine.create_strategy(name)
+        except Exception as e:
+            QMessageBox.critical(self, "New Strategy", f"Failed to create strategy: {e}")
+            return
+
+        self.current_strategy = name
+        self.controls.lbl_strategy_name.setText(f"Strategy: {name}")
+        self.signals_panel.refresh_models({}, None, self.active_features.keys())
+        self._sync_score_panel()
+        QMessageBox.information(self, "New Strategy", f"Strategy '{name}' created in strategies/{name}/")
+
     def load_strategy(self):
         try:
             available = self.engine.list_strategies()
@@ -556,9 +582,8 @@ class ChartWindow(QMainWindow):
 
         ticker = self.controls.ticker_input.text().upper()
         interval = self.controls.interval_combo.currentText()
-        period = self.controls.period_combo.currentText()
-        start = self._period_to_start(period)
-        end = datetime.utcnow().strftime("%Y-%m-%d")
+        end = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=1825)).strftime("%Y-%m-%d")  # 5y
 
         self.training_panel.btn_train.setEnabled(False)
         self.training_panel.progress_bar.setValue(0)
@@ -598,9 +623,8 @@ class ChartWindow(QMainWindow):
 
         ticker = self.controls.ticker_input.text().upper()
         interval = self.controls.interval_combo.currentText()
-        period = self.controls.period_combo.currentText()
-        start = self._period_to_start(period)
-        end = datetime.utcnow().strftime("%Y-%m-%d")
+        end = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=1825)).strftime("%Y-%m-%d")  # 5y
 
         self._worker = EngineWorker(
             self.engine.run_backtest,
@@ -734,38 +758,47 @@ class ChartWindow(QMainWindow):
         self.controls.ticker_input.setText(ticker)
         self.load_chart()
 
-    @staticmethod
-    def _period_to_start(period: str) -> str:
-        """Convert a period string (e.g. '1y') to an ISO-8601 start date."""
-        mapping = {
-            "1mo": timedelta(days=30),
-            "3mo": timedelta(days=90),
-            "6mo": timedelta(days=180),
-            "1y":  timedelta(days=365),
-            "2y":  timedelta(days=730),
-            "5y":  timedelta(days=1825),
-            "10y": timedelta(days=3650),
-            "max": timedelta(days=7300),
-        }
-        delta = mapping.get(period, timedelta(days=365))
-        return (datetime.utcnow() - delta).strftime("%Y-%m-%d")
+    # Maps period label → number of bars to show (approximate, used for view only)
+    _PERIOD_BARS = {
+        "1mo":  21,
+        "3mo":  63,
+        "6mo":  126,
+        "1y":   252,
+        "2y":   504,
+        "5y":   1260,
+        "10y":  2520,
+        "All":  None,  # show everything
+    }
+
+    def _apply_period_view(self):
+        """Pan/zoom the chart to the selected view period without re-fetching."""
+        if self.df is None or self.df.empty:
+            return
+        period = self.controls.period_combo.currentText()
+        n = self._PERIOD_BARS.get(period)
+        total = len(self.df)
+        if n is None or n >= total:
+            self.main_plot.getViewBox().setXRange(0, total)
+        else:
+            self.main_plot.getViewBox().setXRange(total - n, total)
 
     def load_chart(self):
-        ticker = self.controls.ticker_input.text().upper()
+        self._load_timer.stop()  # cancel any pending debounce
+        ticker = self.controls.ticker_input.text().strip().upper()
+        if not ticker:
+            return
         interval = self.controls.interval_combo.currentText()
-        period = self.controls.period_combo.currentText()
-        start = self._period_to_start(period)
-        end = datetime.utcnow().strftime("%Y-%m-%d")
 
         try:
-            df = self.engine.get_historical_data(ticker, interval, start, end)
+            df = self.engine.get_historical_data(ticker, interval)
         except Exception as e:
             QMessageBox.warning(self, "Load Data", f"Failed to fetch {ticker}: {e}")
+            logging.exception(f"Error fetching data for {ticker} ({interval}): {e}")
             raise e
 
         if df is None or df.empty:
             QMessageBox.warning(self, "Load Data", f"No data found for {ticker} ({interval}).")
-            raise ValueError("No data loaded")
+            return
 
         # Normalize column names: DataBroker returns lowercase, chart code expects Title-case
         df.columns = [c.capitalize() for c in df.columns]
@@ -802,8 +835,8 @@ class ChartWindow(QMainWindow):
             
         self._sync_score_panel()
             
-        # Initial X range
-        self.main_plot.setXRange(max(0, len(self.df)-100), len(self.df))
+        # Apply the current period view after loading
+        self._apply_period_view()
         self._refresh_score_underlay()
 
 def main():

@@ -1,21 +1,42 @@
+from collections import defaultdict
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel, QGroupBox, QFormLayout, QLineEdit, QCheckBox, QScrollArea, QFrame)
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QStandardItem, QColor, QFont
 
 class FeaturePanel(QWidget):
     def __init__(self, available_features, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(300)
-        
+
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(5, 5, 5, 5)
-        
+
         # 1. Controls (Add Feature)
         self.feat_combo = QComboBox()
         self.btn_add_feat = QPushButton("Add Feature")
-        
-        sorted_feats = sorted(available_features.values(), key=lambda f: (f.category, f.name))
-        for f in sorted_feats:
-            self.feat_combo.addItem(f"{f.category}: {f.name}", userData=f.name)
+
+        # Group features by category, insert styled separator headers
+        by_category = defaultdict(list)
+        for f in available_features.values():
+            by_category[f.category].append(f)
+
+        model = self.feat_combo.model()
+        for category in sorted(by_category):
+            # --- Category header (non-selectable) ---
+            header = QStandardItem(f"  {category}")
+            header.setFlags(Qt.ItemFlag.NoItemFlags)
+            header.setForeground(QColor("#888888"))
+            font = QFont()
+            font.setBold(True)
+            font.setItalic(True)
+            header.setFont(font)
+            header.setBackground(QColor("#2a2a2a"))
+            model.appendRow(header)
+
+            for f in sorted(by_category[category], key=lambda x: x.name):
+                item = QStandardItem(f"    {f.name}")
+                item.setData(f.name)
+                model.appendRow(item)
         
         main_layout.addWidget(QLabel("Add Feature:"))
         main_layout.addWidget(self.feat_combo)

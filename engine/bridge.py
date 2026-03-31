@@ -74,6 +74,8 @@ class ModelEngine:
     # ------------------------------------------------------------------
 
     def list_strategies(self) -> List[str]:
+        if not os.path.isdir(self.workspace_dir):
+            return []
         result = []
         for name in os.listdir(self.workspace_dir):
             candidate = os.path.join(self.workspace_dir, name)
@@ -81,6 +83,50 @@ class ModelEngine:
             if os.path.isdir(candidate) and os.path.exists(manifest):
                 result.append(name)
         return sorted(result)
+
+    def create_strategy(self, strategy_name: str) -> str:
+        """Scaffold a new strategy workspace in workspace_dir.
+
+        Creates the directory, writes a default manifest, and generates
+        context.py and model.py via WorkspaceManager.
+
+        Returns:
+            str: The name of the newly created strategy.
+
+        Raises:
+            StrategyError: If the name is invalid or already exists.
+        """
+        if not strategy_name or not strategy_name.isidentifier():
+            raise StrategyError(
+                f"'{strategy_name}' is not a valid strategy name. "
+                "Use letters, digits, and underscores only."
+            )
+
+        strat_dir = self._strategy_dir(strategy_name)
+        if os.path.exists(strat_dir):
+            raise StrategyError(f"Strategy '{strategy_name}' already exists.")
+
+        os.makedirs(strat_dir)
+        try:
+            default_features = [
+                {"id": "RSI",           "params": {"period": 14}},
+                {"id": "BollingerBands","params": {"period": 20, "std_dev": 2.0}},
+            ]
+            default_hparams = {"stop_loss": 0.05, "take_profit": 0.10}
+            default_bounds  = {"stop_loss": [0.01, 0.10]}
+
+            wm = WorkspaceManager(strategy_dir=strat_dir)
+            wm.sync(
+                features=default_features,
+                hparams=default_hparams,
+                bounds=default_bounds,
+            )
+        except Exception as e:
+            import shutil
+            shutil.rmtree(strat_dir, ignore_errors=True)
+            raise StrategyError(f"Failed to scaffold strategy '{strategy_name}': {e}") from e
+
+        return strategy_name
 
     def get_strategy_config(self, strategy_name: str) -> dict:
         return self._load_manifest(strategy_name)
@@ -132,9 +178,12 @@ class ModelEngine:
     # Data & Feature Introspection
     # ------------------------------------------------------------------
 
-    def get_historical_data(self, ticker: str, interval: str, start: str, end: str) -> pd.DataFrame:
+    def get_historical_data(self, ticker: str, interval: str,
+                            start: str = None, end: str = None) -> pd.DataFrame:
         return self._broker.get_data(
-            ticker, interval, self._parse_dt(start), self._parse_dt(end)
+            ticker, interval,
+            self._parse_dt(start) if start else None,
+            self._parse_dt(end) if end else None,
         )
 
     def list_cached_tickers(self) -> List[str]:

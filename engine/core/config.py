@@ -15,6 +15,8 @@ class Config:
     
     FRED_API_KEY = os.getenv("FRED_API_KEY")
     
+    STRATEGIES_FOLDER = os.getenv("STRATEGIES_FOLDER", "./strategies")
+    
     @property
     def api_url(self):
         """Returns the full base URL for the API."""
