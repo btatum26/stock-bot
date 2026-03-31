@@ -761,11 +761,11 @@ class ChartWindow(QMainWindow):
             df = self.engine.get_historical_data(ticker, interval, start, end)
         except Exception as e:
             QMessageBox.warning(self, "Load Data", f"Failed to fetch {ticker}: {e}")
-            return
+            raise e
 
         if df is None or df.empty:
             QMessageBox.warning(self, "Load Data", f"No data found for {ticker} ({interval}).")
-            return
+            raise ValueError("No data loaded")
 
         # Normalize column names: DataBroker returns lowercase, chart code expects Title-case
         df.columns = [c.capitalize() for c in df.columns]

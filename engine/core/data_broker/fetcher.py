@@ -7,19 +7,14 @@ from datetime import datetime
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from ..config import config
 
-# 1. Anomaly Logging
 logging.basicConfig(
     filename='data/ingestion.log', 
     level=logging.WARNING,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# 2. Local Disk Caching
-session = requests_cache.CachedSession('yfinance.cache', expire_after=43200)
-
 class DataFetcher:
     def __init__(self, av_api_key: str = "YOUR_FREE_KEY"):
-        self.session = session
         self.av_api_key = av_api_key
         self.FRED_API_KEY = config.FRED_API_KEY  # Access FRED API key from config
 
@@ -37,7 +32,7 @@ class DataFetcher:
         """Fetches OHLCV data with backoff retries."""
         try:
             yf_interval = interval if interval != '4h' else '1h' 
-            df = yf.download(ticker, start=start, end=end, interval=yf_interval, progress=False, session=self.session)
+            df = yf.download(ticker, start=start, end=end, interval=yf_interval, progress=False)
 
             if df.empty:
                 return pd.DataFrame()
@@ -72,7 +67,7 @@ class DataFetcher:
     def fetch_fundamentals(self, ticker: str) -> dict:
         """Fetches fundamentals from YF, falls back to Alpha Vantage on failure."""
         try:
-            stock = yf.Ticker(ticker, session=self.session)
+            stock = yf.Ticker(ticker)
             info = stock.info
             # Extract key ingredients
             return {
@@ -120,7 +115,7 @@ class DataFetcher:
 
         try:
             # Using your existing cached requests session!
-            response = self.session.get(url, params=params)
+            response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
 
