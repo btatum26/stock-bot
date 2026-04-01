@@ -151,7 +151,10 @@ class ApplicationController:
                     continue
                     
                 metrics = Tearsheet.calculate_metrics(datasets[ticker], signals)
-                all_metrics[ticker] = metrics
+                # Store a copy without bulky time-series objects for the CLI summary
+                scalar_metrics = {k: v for k, v in metrics.items()
+                                  if k not in ("equity_curve", "portfolio", "bh_portfolio", "trade_log")}
+                all_metrics[ticker] = scalar_metrics
                 Tearsheet.print_summary(metrics)
                 
         except Exception as e:

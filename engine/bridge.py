@@ -208,7 +208,8 @@ class ModelEngine:
     # Execution (QThread targets)
     # ------------------------------------------------------------------
 
-    def run_backtest(self, strategy_name: str, assets: List[str], timeframe: dict, callbacks: dict) -> dict:
+    def run_backtest(self, strategy_name: str, assets: List[str], timeframe: dict, callbacks: dict,
+                     starting_capital: float = 10_000.0) -> dict:
         strategy_dir = self._strategy_dir(strategy_name)
         start = self._parse_dt(timeframe["start"])
         end = self._parse_dt(timeframe["end"])
@@ -239,6 +240,9 @@ class ModelEngine:
 
         metrics_out: dict = {}
         equity_out: dict = {}
+        portfolio_out: dict = {}
+        bh_portfolio_out: dict = {}
+        trade_log_out: dict = {}
         signals_out: dict = {}
         n_done = len(batch_signals)
 
@@ -254,21 +258,49 @@ class ModelEngine:
                 metrics_out[ticker] = {"error": "No signals produced"}
                 continue
 
-            m = Tearsheet.calculate_metrics(datasets[ticker], signals)
-            equity_curve: pd.Series = m.pop("equity_curve", pd.Series(dtype=float))
+            m = Tearsheet.calculate_metrics(
+                datasets[ticker], signals, starting_capital=starting_capital
+            )
 
-            if len(equity_curve) > 500:
-                step = len(equity_curve) // 500
-                equity_curve = equity_curve.iloc[::step]
+            # Pop time-series objects before storing scalar metrics
+            equity_curve: pd.Series = m.pop("equity_curve", pd.Series(dtype=float))
+            portfolio: pd.Series = m.pop("portfolio", pd.Series(dtype=float))
+            bh_portfolio: pd.Series = m.pop("bh_portfolio", pd.Series(dtype=float))
+            trade_log: pd.DataFrame = m.pop("trade_log", pd.DataFrame())
+
+            # Downsample long series so JSON payloads stay manageable
+            def _downsample(s: pd.Series, max_points: int = 500) -> list:
+                if len(s) > max_points:
+                    s = s.iloc[:: len(s) // max_points]
+                # Convert DatetimeIndex to ISO strings for JSON serialisation
+                return [
+                    {"t": str(idx), "v": round(float(v), 6)}
+                    for idx, v in s.items()
+                ]
 
             metrics_out[ticker] = m
-            equity_out[ticker] = equity_curve.tolist()
+            equity_out[ticker] = _downsample(equity_curve)
+            portfolio_out[ticker] = _downsample(portfolio)
+            bh_portfolio_out[ticker] = _downsample(bh_portfolio)
             signals_out[ticker] = batch_signals[ticker]
+
+            # Trade log: convert Timestamps to strings for JSON
+            if not trade_log.empty:
+                tl = trade_log.copy()
+                for col in ('entry_date', 'exit_date'):
+                    if col in tl.columns:
+                        tl[col] = tl[col].astype(str)
+                trade_log_out[ticker] = tl.to_dict('records')
+            else:
+                trade_log_out[ticker] = []
 
         callbacks["on_progress"](100, "Backtest complete.")
         return {
             "metrics": metrics_out,
             "equity_curves": equity_out,
+            "portfolios": portfolio_out,
+            "bh_portfolios": bh_portfolio_out,
+            "trade_logs": trade_log_out,
             "signals": signals_out,
         }
 

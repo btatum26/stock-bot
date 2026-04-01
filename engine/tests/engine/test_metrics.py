@@ -1,12 +1,13 @@
 """Tests for Tearsheet.calculate_metrics().
 
-Covers: happy path, T+1 execution model, CAGR, Sharpe, max drawdown, win rate,
-profit factor zero-division, all-zero signals, single-day data, equity curve shape.
+Covers: happy path, T+1 execution model, CAGR, Sharpe, Sortino, Calmar,
+max drawdown, win rate, profit factor zero-division, all-zero signals,
+single-day data, equity curve shape, discrete portfolio, trade log.
 """
 import pytest
 import pandas as pd
 import numpy as np
-from engine.core.metrics import Tearsheet
+from engine.core.backtester import Tearsheet
 
 
 # ---------------------------------------------------------------------------
@@ -14,13 +15,13 @@ from engine.core.metrics import Tearsheet
 # ---------------------------------------------------------------------------
 
 def _make_df(n: int = 50, seed: int = 42) -> pd.DataFrame:
-    """Return a minimal OHLCV DataFrame with a DatetimeIndex."""
+    """Return a minimal OHLCV DataFrame with lowercase columns and a DatetimeIndex."""
     rng = np.random.default_rng(seed)
     dates = pd.date_range("2020-01-01", periods=n, freq="B")
     close = 100 + np.cumsum(rng.normal(0, 1, n))
     open_ = close + rng.normal(0, 0.5, n)
     return pd.DataFrame(
-        {"Open": open_, "High": close + 1, "Low": close - 1, "Close": close, "Volume": 1_000_000},
+        {"open": open_, "high": close + 1, "low": close - 1, "close": close, "volume": 1_000_000},
         index=dates,
     )
 
@@ -45,7 +46,10 @@ class TestTearsheetReturnShape:
         required = {
             "Total Return (%)", "CAGR (%)", "Max Drawdown (%)",
             "Win Rate (%)", "Profit Factor", "Total Trades",
-            "Sharpe Ratio", "Deflated Sharpe Ratio", "equity_curve",
+            "Sharpe Ratio", "Sortino Ratio", "Calmar Ratio",
+            "Avg Win (%)", "Avg Loss (%)", "Expectancy (%)",
+            "Discrete Trades", "Discrete Win Rate (%)",
+            "equity_curve", "portfolio", "bh_portfolio", "trade_log",
         }
         df = _make_df()
         signals = pd.Series(1.0, index=df.index)
@@ -65,6 +69,24 @@ class TestTearsheetReturnShape:
         result = Tearsheet.calculate_metrics(df, signals)
         assert len(result["equity_curve"]) == n
 
+    def test_portfolio_is_series(self):
+        df = _make_df()
+        signals = pd.Series(1.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        assert isinstance(result["portfolio"], pd.Series)
+
+    def test_bh_portfolio_is_series(self):
+        df = _make_df()
+        signals = pd.Series(1.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        assert isinstance(result["bh_portfolio"], pd.Series)
+
+    def test_trade_log_is_dataframe(self):
+        df = _make_df()
+        signals = pd.Series([1.0, -1.0] * (len(df) // 2), index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        assert isinstance(result["trade_log"], pd.DataFrame)
+
 
 # ---------------------------------------------------------------------------
 # Numerical correctness
@@ -75,7 +97,6 @@ class TestTearsheetNumerics:
         df = _make_df()
         signals = pd.Series(0.0, index=df.index)
         result = Tearsheet.calculate_metrics(df, signals)
-        # Flat position → no return, no drawdown
         assert result["Total Return (%)"] == pytest.approx(0.0, abs=1e-6)
         assert result["Max Drawdown (%)"] == pytest.approx(0.0, abs=1e-6)
         assert result["Total Trades"] == 0
@@ -91,15 +112,22 @@ class TestTearsheetNumerics:
         """Constant long signal on a rising open price should produce an equity > 1."""
         n = 30
         dates = pd.date_range("2020-01-01", periods=n, freq="B")
-        open_ = np.linspace(100, 130, n)           # strictly rising opens
+        open_ = np.linspace(100, 130, n)
         df = pd.DataFrame(
-            {"Open": open_, "High": open_ + 1, "Low": open_ - 1,
-             "Close": open_, "Volume": 1_000},
+            {"open": open_, "high": open_ + 1, "low": open_ - 1,
+             "close": open_, "volume": 1_000},
             index=dates,
         )
         signals = pd.Series(1.0, index=df.index)
         result = Tearsheet.calculate_metrics(df, signals)
         assert result["equity_curve"].iloc[-1] > 1.0
+
+    def test_portfolio_starts_at_starting_capital(self):
+        """First bar of portfolio should equal starting_capital."""
+        df = _make_df()
+        signals = pd.Series(1.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals, starting_capital=50_000.0)
+        assert result["portfolio"].iloc[0] == pytest.approx(50_000.0, rel=0.01)
 
     def test_max_drawdown_negative_or_zero(self):
         df = _make_df()
@@ -119,17 +147,37 @@ class TestTearsheetNumerics:
         result = Tearsheet.calculate_metrics(df, signals)
         assert np.isfinite(result["Sharpe Ratio"])
 
+    def test_sortino_is_finite_for_nonzero_signals(self):
+        df = _make_df()
+        signals = pd.Series(1.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        assert np.isfinite(result["Sortino Ratio"])
+
+    def test_calmar_ratio_positive_when_cagr_positive(self):
+        """Calmar = CAGR / |MaxDD|. Should be positive if CAGR > 0."""
+        n = 30
+        dates = pd.date_range("2020-01-01", periods=n, freq="B")
+        open_ = np.linspace(100, 130, n)
+        df = pd.DataFrame(
+            {"open": open_, "high": open_ + 1, "low": open_ - 1,
+             "close": open_, "volume": 1_000},
+            index=dates,
+        )
+        signals = pd.Series(1.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        if result["CAGR (%)"] > 0:
+            assert result["Calmar Ratio"] >= 0.0
+
     def test_profit_factor_inf_when_no_losses(self):
         """When strategy has only gains, Profit Factor should be infinity."""
         n = 30
         dates = pd.date_range("2020-01-01", periods=n, freq="B")
-        open_ = np.arange(100.0, 100.0 + n)        # strictly increasing
+        open_ = np.arange(100.0, 100.0 + n)
         df = pd.DataFrame(
-            {"Open": open_, "High": open_ + 1, "Low": open_ - 1,
-             "Close": open_, "Volume": 1_000},
+            {"open": open_, "high": open_ + 1, "low": open_ - 1,
+             "close": open_, "volume": 1_000},
             index=dates,
         )
-        # Entry at T=0, stay long — every trade return is positive
         signals = pd.Series(1.0, index=df.index)
         result = Tearsheet.calculate_metrics(df, signals)
         assert result["Profit Factor"] == float("inf") or result["Profit Factor"] > 1.0
@@ -137,7 +185,6 @@ class TestTearsheetNumerics:
     def test_total_trades_counts_signal_changes(self):
         n = 10
         df = _make_df(n)
-        # Alternating ±1 → 9 direction changes
         vals = [1.0, -1.0] * (n // 2)
         signals = pd.Series(vals, index=df.index)
         result = Tearsheet.calculate_metrics(df, signals)
@@ -153,6 +200,66 @@ class TestTearsheetNumerics:
 
 
 # ---------------------------------------------------------------------------
+# Discrete simulation
+# ---------------------------------------------------------------------------
+
+class TestDiscreteSimulation:
+    def test_zero_signals_produce_no_trades(self):
+        df = _make_df()
+        signals = pd.Series(0.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        assert result["Discrete Trades"] == 0
+        assert result["trade_log"].empty
+
+    def test_trade_log_has_expected_columns(self):
+        df = _make_df()
+        signals = pd.Series([1.0, -1.0] * (len(df) // 2), index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        expected_cols = {"entry_date", "exit_date", "direction", "entry_price", "exit_price",
+                         "return_pct", "bars_held"}
+        if not result["trade_log"].empty:
+            assert expected_cols.issubset(result["trade_log"].columns)
+
+    def test_below_threshold_signals_produce_no_trades(self):
+        """Signals below entry_threshold should result in flat position and no trades."""
+        df = _make_df()
+        signals = pd.Series(0.1, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals, entry_threshold=0.2)
+        assert result["Discrete Trades"] == 0
+
+    def test_trade_direction_is_long_for_positive_signal(self):
+        n = 20
+        df = _make_df(n)
+        signals = pd.Series(1.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        tl = result["trade_log"]
+        if not tl.empty:
+            assert (tl["direction"] == "LONG").all()
+
+    def test_trade_direction_is_short_for_negative_signal(self):
+        n = 20
+        df = _make_df(n)
+        signals = pd.Series(-1.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals)
+        tl = result["trade_log"]
+        if not tl.empty:
+            assert (tl["direction"] == "SHORT").all()
+
+    def test_portfolio_grows_on_sustained_long_uptrend(self):
+        n = 30
+        dates = pd.date_range("2020-01-01", periods=n, freq="B")
+        open_ = np.linspace(100, 130, n)
+        df = pd.DataFrame(
+            {"open": open_, "high": open_ + 1, "low": open_ - 1,
+             "close": open_, "volume": 1_000},
+            index=dates,
+        )
+        signals = pd.Series(1.0, index=df.index)
+        result = Tearsheet.calculate_metrics(df, signals, starting_capital=10_000.0)
+        assert result["portfolio"].iloc[-1] > 10_000.0
+
+
+# ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
 
@@ -161,36 +268,28 @@ class TestTearsheetEdgeCases:
         """Single-row DataFrame should return zeros without raising."""
         dates = pd.date_range("2020-01-01", periods=1)
         df = pd.DataFrame(
-            {"Open": [100.0], "High": [101.0], "Low": [99.0],
-             "Close": [100.0], "Volume": [1000]},
+            {"open": [100.0], "high": [101.0], "low": [99.0],
+             "close": [100.0], "volume": [1000]},
             index=dates,
         )
         signals = pd.Series([1.0], index=dates)
         result = Tearsheet.calculate_metrics(df, signals)
-        assert result["CAGR (%)"] == 0.0  # same-day start/end → days==0 branch
+        assert result["CAGR (%)"] == 0.0
 
     def test_cagr_zero_when_same_day_start_end(self):
-        """days == 0 guard should return CAGR of 0."""
         dates = pd.date_range("2020-06-01", periods=1)
         df = pd.DataFrame(
-            {"Open": [100.0], "High": [101.0], "Low": [99.0],
-             "Close": [100.0], "Volume": [1000]},
+            {"open": [100.0], "high": [101.0], "low": [99.0],
+             "close": [100.0], "volume": [1000]},
             index=dates,
         )
         signals = pd.Series([0.0], index=dates)
         result = Tearsheet.calculate_metrics(df, signals)
         assert result["CAGR (%)"] == 0.0
 
-    def test_deflated_sharpe_placeholder_is_zero(self):
-        """DSR is a TODO placeholder that should always be 0.0 for now."""
-        df = _make_df()
-        signals = pd.Series(1.0, index=df.index)
-        result = Tearsheet.calculate_metrics(df, signals)
-        assert result["Deflated Sharpe Ratio"] == 0.0
-
     def test_print_summary_does_not_raise(self):
         """print_summary should complete without exceptions."""
         df = _make_df()
         signals = pd.Series(1.0, index=df.index)
         metrics = Tearsheet.calculate_metrics(df, signals)
-        Tearsheet.print_summary(metrics)  # would raise if broken
+        Tearsheet.print_summary(metrics)

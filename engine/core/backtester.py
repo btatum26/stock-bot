@@ -11,21 +11,273 @@ from .features.features import compute_all_features
 from .logger import logger
 from .exceptions import StrategyError
 
+# ---------------------------------------------------------------------------
+# Tearsheet — formerly engine/core/metrics.py
+# ---------------------------------------------------------------------------
+
+class Tearsheet:
+    """
+    Translates raw signals into trading reality.
+
+    Provides two complementary views of strategy performance:
+      - calculate_metrics(): continuous fractional-allocation model used for
+        optimization fitness scoring (smooth gradients, Sharpe as objective).
+      - Discrete simulation embedded within calculate_metrics(): thresholds
+        signals to real -1/0/+1 positions, tracks a dollar portfolio, and
+        builds a per-trade log so callers can visualize exactly where money
+        went.
+    """
+
+    @staticmethod
+    def calculate_metrics(
+        df: pd.DataFrame,
+        signals: pd.Series,
+        friction: float = 0.001,
+        starting_capital: float = 10_000.0,
+        entry_threshold: float = 0.2,
+    ) -> Dict[str, Any]:
+        """
+        Calculates performance metrics using a T+1 execution model.
+
+        Signals generated at bar [T] are executed at bar [T+1] open.
+        Returns are realised from [T+1] open to [T+2] open.
+
+        Args:
+            df: OHLCV DataFrame with lowercase column names and a DatetimeIndex.
+            signals: Conviction signals in [-1.0, 1.0].
+            friction: Round-trip transaction cost per trade (default 10 bps).
+            starting_capital: Dollar amount for the discrete portfolio simulation.
+            entry_threshold: Minimum absolute signal magnitude to open a position
+                in the discrete simulation (default 0.2 = 20% conviction).
+
+        Returns:
+            Dict containing scalar metrics plus three time-series objects:
+              - ``equity_curve`` (pd.Series): normalised growth index from 1.0
+                (used by the optimiser as a smooth fitness surface).
+              - ``portfolio`` (pd.Series): dollar value of the discrete portfolio.
+              - ``bh_portfolio`` (pd.Series): buy-and-hold dollar benchmark.
+              - ``trade_log`` (pd.DataFrame): one row per discrete round trip.
+        """
+        # ------------------------------------------------------------------
+        # 1. Continuous signal model (optimiser fitness)
+        # ------------------------------------------------------------------
+        # Return from T+1 open to T+2 open, aligned back to bar T.
+        returns = df['open'].pct_change().shift(-2)
+        strategy_returns = signals * returns
+
+        # Friction fires on every change in signal magnitude (continuous model).
+        trades_mask = signals.diff().fillna(0).abs()
+        strategy_returns -= trades_mask * friction
+
+        equity_curve = (1 + strategy_returns.fillna(0)).cumprod()
+
+        total_return = (equity_curve.iloc[-1] - 1) * 100
+        total_trades_continuous = int((trades_mask > 0).sum())
+
+        days = (df.index.max() - df.index.min()).days
+        cagr = ((equity_curve.iloc[-1]) ** (365.25 / days) - 1) * 100 if days > 0 else 0.0
+
+        trade_returns = strategy_returns[trades_mask > 0]
+        win_rate = (trade_returns > 0).mean() * 100 if not trade_returns.empty else 0.0
+
+        gains = strategy_returns[strategy_returns > 0].sum()
+        losses = abs(strategy_returns[strategy_returns < 0].sum())
+        profit_factor = gains / losses if losses > 0 else float('inf')
+
+        rolling_max = equity_curve.cummax()
+        drawdown = (equity_curve - rolling_max) / rolling_max
+        max_drawdown = drawdown.min() * 100  # negative number, e.g. -25.3
+
+        volatility = strategy_returns.std() * np.sqrt(252)
+        sharpe = (strategy_returns.mean() * 252) / volatility if volatility > 0 else 0.0
+
+        downside = strategy_returns[strategy_returns < 0]
+        downside_vol = downside.std() * np.sqrt(252) if len(downside) > 0 else 0.0
+        sortino = (strategy_returns.mean() * 252) / downside_vol if downside_vol > 0 else 0.0
+
+        calmar = cagr / abs(max_drawdown) if max_drawdown != 0 else 0.0
+
+        avg_win = trade_returns[trade_returns > 0].mean() * 100 if (trade_returns > 0).any() else 0.0
+        avg_loss = trade_returns[trade_returns < 0].mean() * 100 if (trade_returns < 0).any() else 0.0
+        win_rate_decimal = win_rate / 100
+        expectancy = (win_rate_decimal * avg_win) + ((1 - win_rate_decimal) * avg_loss)
+
+        # ------------------------------------------------------------------
+        # 2. Discrete position simulation (dollar portfolio)
+        # ------------------------------------------------------------------
+        position = pd.Series(0.0, index=signals.index)
+        position[signals >= entry_threshold] = 1.0
+        position[signals <= -entry_threshold] = -1.0
+
+        discrete_friction = position.diff().abs().fillna(0) * friction
+        discrete_returns = (position * returns) - discrete_friction
+        portfolio = pd.Series(
+            starting_capital * (1 + discrete_returns.fillna(0)).cumprod(),
+            index=signals.index,
+        )
+
+        bh_portfolio = pd.Series(
+            starting_capital * (1 + returns.fillna(0)).cumprod(),
+            index=signals.index,
+        )
+
+        # ------------------------------------------------------------------
+        # 3. Trade log (one row per discrete round trip)
+        # ------------------------------------------------------------------
+        trade_log = Tearsheet._build_trade_log(position, df)
+
+        total_trades_discrete = len(trade_log)
+        discrete_win_rate = (
+            (trade_log['return_pct'] > 0).mean() * 100
+            if not trade_log.empty else 0.0
+        )
+
+        return {
+            # Growth
+            "Total Return (%)":    round(total_return, 2),
+            "CAGR (%)":            round(cagr, 2),
+            # Risk / quality
+            "Sharpe Ratio":        round(sharpe, 2),
+            "Sortino Ratio":       round(sortino, 2),
+            "Calmar Ratio":        round(calmar, 2),
+            "Max Drawdown (%)":    round(max_drawdown, 2),
+            # Trade mechanics
+            "Win Rate (%)":        round(win_rate, 2),
+            "Avg Win (%)":         round(avg_win, 4),
+            "Avg Loss (%)":        round(avg_loss, 4),
+            "Expectancy (%)":      round(expectancy, 4),
+            "Profit Factor":       round(profit_factor, 2),
+            "Total Trades":        total_trades_continuous,
+            # Discrete simulation results
+            "Discrete Trades":     total_trades_discrete,
+            "Discrete Win Rate (%)": round(discrete_win_rate, 2),
+            # Time-series objects (popped by callers before serialising)
+            "equity_curve":        equity_curve,
+            "portfolio":           portfolio,
+            "bh_portfolio":        bh_portfolio,
+            "trade_log":           trade_log,
+        }
+
+    @staticmethod
+    def _build_trade_log(position: pd.Series, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Builds a trade log from a discrete position series.
+
+        Each row represents one round-trip trade: from the bar where a non-zero
+        position first appears to the bar where it ends.  Entry and exit prices
+        use bar opens (T+1 execution model).
+
+        Args:
+            position: Discrete positions series (-1.0, 0.0, 1.0).
+            df: OHLCV DataFrame aligned to the same index as position.
+
+        Returns:
+            DataFrame with columns: entry_date, exit_date, direction,
+            entry_price, exit_price, return_pct, bars_held.
+        """
+        empty = pd.DataFrame(columns=[
+            'entry_date', 'exit_date', 'direction',
+            'entry_price', 'exit_price', 'return_pct', 'bars_held',
+        ])
+
+        if position.empty or (position == 0).all():
+            return empty
+
+        opens = df['open']
+        closes = df['close']
+
+        # Every bar where the position value changes (entry, exit, or flip).
+        pos_change = position.diff().fillna(position.iloc[0]) != 0
+        # Entry bars: position changes AND the new value is non-zero.
+        entry_bars = position.index[pos_change & (position != 0)].tolist()
+
+        if not entry_bars:
+            return empty
+
+        trades = []
+        for entry_bar in entry_bars:
+            direction = int(position.loc[entry_bar])
+
+            # Subsequent bars where the position changes again (exit or flip).
+            subsequent = position.index[
+                (position.index > entry_bar) & (position.diff().fillna(0) != 0)
+            ]
+            exit_signal_bar = subsequent[0] if len(subsequent) > 0 else None
+
+            # Entry price = open of the bar after the signal bar (T+1 execution).
+            entry_loc = opens.index.get_loc(entry_bar)
+            if entry_loc + 1 >= len(opens):
+                continue  # signal fires on the last bar — no room to enter
+            actual_entry_date = opens.index[entry_loc + 1]
+            entry_price = float(opens.iloc[entry_loc + 1])
+
+            # Exit price = open of the bar after the exit-signal bar, or last close.
+            if exit_signal_bar is not None:
+                exit_loc = opens.index.get_loc(exit_signal_bar)
+                if exit_loc + 1 < len(opens):
+                    actual_exit_date = opens.index[exit_loc + 1]
+                    exit_price = float(opens.iloc[exit_loc + 1])
+                else:
+                    actual_exit_date = opens.index[-1]
+                    exit_price = float(closes.iloc[-1])
+            else:
+                actual_exit_date = opens.index[-1]
+                exit_price = float(closes.iloc[-1])
+
+            if entry_price <= 0:
+                continue
+
+            return_pct = (exit_price - entry_price) / entry_price * direction * 100
+
+            entry_iloc = opens.index.get_loc(actual_entry_date)
+            exit_iloc = opens.index.get_loc(actual_exit_date)
+            bars_held = max(1, exit_iloc - entry_iloc)
+
+            trades.append({
+                'entry_date':   actual_entry_date,
+                'exit_date':    actual_exit_date,
+                'direction':    'LONG' if direction == 1 else 'SHORT',
+                'entry_price':  round(entry_price, 4),
+                'exit_price':   round(exit_price, 4),
+                'return_pct':   round(return_pct, 4),
+                'bars_held':    bars_held,
+            })
+
+        return pd.DataFrame(trades) if trades else empty
+
+    @staticmethod
+    def print_summary(metrics: Dict[str, Any]):
+        """Outputs scalar metrics to the console in a clean ASCII table."""
+        skip = {"equity_curve", "portfolio", "bh_portfolio", "trade_log"}
+        print("\n" + "=" * 40)
+        print(" " * 10 + "STRATEGY PERFORMANCE")
+        print("=" * 40)
+        for key, value in metrics.items():
+            if key in skip:
+                continue
+            print(f"{key:<28}: {value}")
+        print("=" * 40 + "\n")
+
+
+# ---------------------------------------------------------------------------
+# LocalBacktester
+# ---------------------------------------------------------------------------
+
 class LocalBacktester:
     """
     Handles the local execution and testing of user-defined strategy models.
-    
-    This class is responsible for loading the strategy manifest, dynamically 
-    importing the user's Python scripts, computing Phase 2 features, purging 
+
+    This class is responsible for loading the strategy manifest, dynamically
+    importing the user's Python scripts, computing Phase 2 features, purging
     warmup NaNs, and executing the strategy's signal generation logic.
     """
-    
+
     def __init__(self, strategy_dir: str):
         """
         Initializes the backtester for a specific strategy directory.
 
         Args:
-            strategy_dir (str): The path to the strategy folder containing the 
+            strategy_dir (str): The path to the strategy folder containing the
                 `manifest.json`, `model.py`, and `context.py` files.
 
         Raises:
@@ -45,7 +297,7 @@ class LocalBacktester:
         Dynamically imports the user-defined model and context classes.
 
         Returns:
-            Tuple[type, Optional[type]]: 
+            Tuple[type, Optional[type]]:
                 - model_class (type): The uninstantiated user SignalModel subclass.
                 - context_class (Optional[type]): The uninstantiated user Context class, if it exists.
 
@@ -54,7 +306,7 @@ class LocalBacktester:
         """
         model_path = os.path.join(self.strategy_dir, "model.py")
         context_module_path = os.path.join(self.strategy_dir, "context.py")
-        
+
         if not os.path.exists(model_path):
             raise StrategyError(f"model.py not found in {self.strategy_dir}")
 
@@ -71,11 +323,11 @@ class LocalBacktester:
             model_module_name = f"user_strat_{os.path.basename(self.strategy_dir)}"
             spec = importlib.util.spec_from_file_location(model_module_name, model_path)
             module = importlib.util.module_from_spec(spec)
-            
+
             # Allow internal imports within the strategy directory
             if self.strategy_dir not in sys.path:
                 sys.path.insert(0, self.strategy_dir)
-                
+
             try:
                 sys.modules[model_module_name] = module
                 if spec and spec.loader:
@@ -83,23 +335,23 @@ class LocalBacktester:
             finally:
                 if self.strategy_dir in sys.path:
                     sys.path.remove(self.strategy_dir)
-            
+
             from .controller import SignalModel
             for obj_name in dir(module):
                 obj = getattr(module, obj_name)
                 if isinstance(obj, type) and issubclass(obj, SignalModel) and obj is not SignalModel:
                     return obj, context_class
-                    
+
             raise StrategyError(f"No valid SignalModel subclass found in {model_path}")
         except Exception as e:
             logger.error(f"Failed to load strategy components: {e}")
             raise StrategyError(f"Strategy initialization failed: {e}")
-        
+
     def _audit_nans(self, df: pd.DataFrame, feature_ids: List[str]):
         """
         Scans for NaN values in computed features and logs warnings.
 
-        Note: Since the l_max purge handles rolling indicator warmup periods, 
+        Note: Since the l_max purge handles rolling indicator warmup periods,
         any NaNs caught by this method indicate flawed data or broken indicators.
 
         Args:
@@ -119,7 +371,7 @@ class LocalBacktester:
 
         Args:
             raw_data (pd.DataFrame): The raw OHLCV market data.
-            params (Optional[Dict[str, Any]]): Strategy hyperparameters. Defaults to 
+            params (Optional[Dict[str, Any]]): Strategy hyperparameters. Defaults to
                 the values in `manifest.json`.
 
         Returns:
@@ -130,48 +382,48 @@ class LocalBacktester:
         """
         try:
             features_config = self.manifest.get('features', [])
-            
+
             # Universal Feature Calculation
             df_full, l_max = compute_all_features(raw_data, features_config)
-            
+
             # Universal Warmup Purge (Protects both ML and Rule-Based from NaN lookbacks)
             df_clean = df_full.iloc[l_max:].copy()
-            
+
             feature_ids = [f['id'] for f in features_config]
             self._audit_nans(df_clean, feature_ids)
-            
+
             # Component Initialization
             model_class, context_class = self._load_user_model_and_context()
             model = model_class()
             context = context_class() if context_class else None
             hyperparams = params if params is not None else self.manifest.get('hyperparameters', {})
-            
+
             # Routing (ML vs Rule-Based)
             is_ml = self.manifest.get("is_ml", False)
-            
+
             if is_ml:
                 # TODO: Inject MLBridge for MinMaxScaler transformations here
                 pass
-            
+
             # Execution
             artifacts = model.train(df_clean, context, hyperparams)
-            
+
             # TODO: ArtifactManager should save/load here if splitting Train and Inference
-            
+
             raw_signals = model.generate_signals(df_clean, context, hyperparams, artifacts)
-            
+
             # Grab the compression mode from the user's manifest, default to 'clip'
             comp_mode = self.manifest.get('compression_mode', 'clip')
 
             # Squash it. If the user breaks the rules, this throws a StrategyError and halts the run safely.
             clean_signals = SignalValidator.validate_and_compress(
-                raw_signals=raw_signals, 
-                target_index=df_clean.index, 
+                raw_signals=raw_signals,
+                target_index=df_clean.index,
                 compression_mode=comp_mode
             )
 
             return clean_signals
-            
+
         except Exception as e:
             logger.error(f"Backtest execution failed: {e}")
             raise StrategyError(f"Backtest run failed: {e}")
@@ -182,7 +434,7 @@ class LocalBacktester:
 
         Args:
             raw_data (pd.DataFrame): The raw OHLCV market data.
-            param_bounds (Optional[Dict[str, List[Any]]]): Dictionary of lists containing 
+            param_bounds (Optional[Dict[str, List[Any]]]): Dictionary of lists containing
                 parameter options. Defaults to the bounds in `manifest.json`.
 
         Returns:
@@ -191,39 +443,39 @@ class LocalBacktester:
         try:
             if param_bounds is None:
                 param_bounds = self.manifest.get('parameter_bounds', {})
-                
+
             if not param_bounds:
                 return [self.run(raw_data)]
 
             features_config = self.manifest.get('features', [])
             df_full, l_max = compute_all_features(raw_data, features_config)
-            
+
             # Apply Universal Warmup Purge
             df_clean = df_full.iloc[l_max:].copy()
-            
+
             feature_ids = [f['id'] for f in features_config]
             self._audit_nans(df_clean, feature_ids)
-            
+
             model_class, context_class = self._load_user_model_and_context()
-            
+
             keys = list(param_bounds.keys())
             values = list(param_bounds.values())
             permutations = [dict(zip(keys, v)) for v in itertools.product(*values)]
-            
+
             logger.info(f"Starting parameter sweep across {len(permutations)} permutations.")
             results = []
             for i, p in enumerate(permutations):
                 # Instantiate fresh objects to prevent state leakage
                 model = model_class()
                 context = context_class() if context_class else None
-                
+
                 artifacts = model.train(df_clean, context, p)
                 signals = model.generate_signals(df_clean, context, p, artifacts)
-                
+
                 param_str = ", ".join([f"{k}={v}" for k, v in p.items()])
                 signals.name = f"{os.path.basename(self.strategy_dir)} ({param_str})"
                 results.append(signals)
-                
+
             return results
         except Exception as e:
             logger.error(f"Grid search failed: {e}")
@@ -234,7 +486,7 @@ class LocalBacktester:
         Executes a batch of backtests across multiple assets efficiently.
 
         Args:
-            datasets (Dict[str, pd.DataFrame]): A dictionary mapping ticker symbols to 
+            datasets (Dict[str, pd.DataFrame]): A dictionary mapping ticker symbols to
                 their respective raw OHLCV DataFrames.
             params (Optional[Dict[str, Any]]): Strategy hyperparameters.
 
@@ -257,10 +509,10 @@ class LocalBacktester:
                 logger.info(f"Processing batch execution for {ticker}")
                 try:
                     df_full, l_max = compute_all_features(df_raw, features_config)
-                    
+
                     # Apply Universal Warmup Purge
                     df_clean = df_full.iloc[l_max:].copy()
-                    
+
                     self._audit_nans(df_clean, feature_ids)
 
                     # Instantiate fresh objects to prevent state leakage between assets
@@ -272,49 +524,52 @@ class LocalBacktester:
                     results[ticker] = signals
                 except Exception as e:
                     logger.error(f"Batch execution failed for {ticker}: {e}")
-                    results[ticker] = pd.Series(dtype=float) 
-                    
+                    results[ticker] = pd.Series(dtype=float)
+
             return results
-            
+
         except Exception as e:
             logger.error(f"Batch setup failed: {e}")
             raise StrategyError(f"Batch run failed: {e}")
-        
-        
-        
+
+
+# ---------------------------------------------------------------------------
+# SignalValidator
+# ---------------------------------------------------------------------------
+
 class SignalValidator:
     """
     The final safety boundary before signals reach the execution or backtesting engine.
-    
-    This class coerces arbitrary user outputs into a strict, mathematically bounded 
-    Phase 3 Signal Array. It guarantees that the output is a pandas Series, exactly 
-    matches the input timeframe's index, contains no invalid data (NaN/Inf), and 
+
+    This class coerces arbitrary user outputs into a strict, mathematically bounded
+    Phase 3 Signal Array. It guarantees that the output is a pandas Series, exactly
+    matches the input timeframe's index, contains no invalid data (NaN/Inf), and
     is strictly bounded between [-1.0, 1.0].
     """
 
     @staticmethod
     def validate_and_compress(
-        raw_signals: Any, 
-        target_index: pd.Index, 
+        raw_signals: Any,
+        target_index: pd.Index,
         compression_mode: str = 'clip'
     ) -> pd.Series:
         """
         Formats, aligns, and mathematically compresses arbitrary model predictions.
 
         Args:
-            raw_signals (Any): The raw output from the user's `generate_signals()` method. 
+            raw_signals (Any): The raw output from the user's `generate_signals()` method.
                 Could be a list, numpy array, or pandas Series.
-            target_index (pd.Index): The exact datetime index of the DataFrame that 
+            target_index (pd.Index): The exact datetime index of the DataFrame that
                 was passed into the user's model. Used to ensure alignment.
-            compression_mode (str, optional): The mathematical method used to squash 
-                the signals into the [-1.0, 1.0] boundary. 
+            compression_mode (str, optional): The mathematical method used to squash
+                the signals into the [-1.0, 1.0] boundary.
                 - 'clip': Hard boundary. Values > 1 become 1, values < -1 become -1.
                 - 'tanh': Soft squashing function. Best for unbounded regression outputs.
                 - 'probability': Maps a [0.0, 1.0] classifier probability to [-1.0, 1.0].
                 Defaults to 'clip'.
 
         Returns:
-            pd.Series: A perfectly aligned series bounded between [-1.0, 1.0], with 
+            pd.Series: A perfectly aligned series bounded between [-1.0, 1.0], with
                 0.0 indicating "no conviction / flat".
 
         Raises:
@@ -345,7 +600,7 @@ class SignalValidator:
             signals.index = target_index
             logger.debug("Forced target index onto user signals.")
         else:
-            # User dropped rows or messed up the shape. 
+            # User dropped rows or messed up the shape.
             logger.warning(f"Signal length ({len(signals)}) does not match input length ({len(target_index)}). Attempting to reindex.")
             # If they provided a proper index, we map it. If not, this will likely fail or fill with NaNs.
             try:
@@ -360,17 +615,17 @@ class SignalValidator:
         # 5. Mathematical Compression to [-1.0, 1.0]
         if compression_mode == 'clip':
             signals = signals.clip(lower=-1.0, upper=1.0)
-            
+
         elif compression_mode == 'tanh':
             # Great for raw expected returns (e.g., passing 0.05 return through tanh)
             # You might need a scalar multiplier here depending on asset volatility
             signals = np.tanh(signals)
-            
+
         elif compression_mode == 'probability':
             # Maps XGBoost binary probabilities [0, 1] to [-1, 1]
             # 0.5 becomes 0.0 (neutral). 1.0 becomes 1.0 (long). 0.0 becomes -1.0 (short).
             signals = (signals * 2) - 1.0
-            
+
         else:
             logger.warning(f"Unknown compression mode '{compression_mode}'. Defaulting to 'clip'.")
             signals = signals.clip(lower=-1.0, upper=1.0)
