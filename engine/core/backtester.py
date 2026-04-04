@@ -62,7 +62,9 @@ class Tearsheet:
         # 1. Continuous signal model (optimiser fitness)
         # ------------------------------------------------------------------
         # Return from T+1 open to T+2 open, aligned back to bar T.
-        returns = df['open'].pct_change().shift(-2)
+        # Reindex to signals.index so all downstream operations share the same index
+        # (df may be the full raw frame while signals come from the warmup-purged slice).
+        returns = df['open'].pct_change().shift(-2).reindex(signals.index)
         strategy_returns = signals * returns
 
         # Friction fires on every change in signal magnitude (continuous model).
