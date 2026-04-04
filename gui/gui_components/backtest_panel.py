@@ -268,7 +268,7 @@ class BacktestPanel(QWidget):
         outer = QScrollArea()
         outer.setWidgetResizable(True)
         outer.setFrameShape(QFrame.Shape.NoFrame)
-        outer.setFixedWidth(350)
+        outer.setMinimumWidth(220)
 
         inner = QWidget()
         layout = QVBoxLayout(inner)
@@ -424,10 +424,12 @@ class BacktestPanel(QWidget):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(4)
 
-        lbl = QLabel(f"{key}:")
-        lbl.setFixedWidth(110)
-        lbl.setToolTip(key)
-        row_layout.addWidget(lbl)
+        name_edit = QLineEdit(key)
+        name_edit.setFixedWidth(110)
+        name_edit.setToolTip("Parameter name — edit to rename")
+        name_edit.setStyleSheet("color: #aaa; font-style: italic;")
+        name_edit.editingFinished.connect(lambda: self._inline_rename_hyperparam(name_edit, key))
+        row_layout.addWidget(name_edit)
 
         if isinstance(val, bool):
             w = QCheckBox()
@@ -449,12 +451,6 @@ class BacktestPanel(QWidget):
             w.editingFinished.connect(self._save_hparams)
         row_layout.addWidget(w, 1)
         self._param_widgets[key] = w
-
-        btn_rename = QPushButton("Rename")
-        btn_rename.setFixedWidth(52)
-        btn_rename.setStyleSheet("font-size: 10px; padding: 2px;")
-        btn_rename.clicked.connect(lambda _, k=key: self._rename_hyperparam(k))
-        row_layout.addWidget(btn_rename)
 
         btn_remove = QPushButton("x")
         btn_remove.setFixedWidth(22)
@@ -538,19 +534,18 @@ class BacktestPanel(QWidget):
         self._write_hparams_to_manifest(current)
         self._build_param_widgets(current)
 
-    def _rename_hyperparam(self, old_key: str):
-        new_key, ok = QInputDialog.getText(
-            self, "Rename Hyperparameter",
-            f"New name for '{old_key}':", text=old_key)
-        if not ok or not new_key.strip() or new_key.strip() == old_key:
+    def _inline_rename_hyperparam(self, name_edit: QLineEdit, old_key: str):
+        new_key = name_edit.text().strip()
+        if new_key == old_key:
             return
-        new_key = new_key.strip()
         if not new_key.isidentifier():
             self._log(f"Invalid name: '{new_key}' — must be a valid Python identifier.")
+            name_edit.setText(old_key)
             return
         current = self._get_params()
         if new_key in current:
             self._log(f"Hyperparameter '{new_key}' already exists.")
+            name_edit.setText(old_key)
             return
         new_params = {(new_key if k == old_key else k): v for k, v in current.items()}
         self._write_hparams_to_manifest(new_params)
