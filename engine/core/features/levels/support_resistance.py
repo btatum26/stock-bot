@@ -22,7 +22,7 @@ class SupportResistance(Feature):
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
-            "method": "Bill Williams",
+            "method": ["ZigZag", "Savitzky-Golay", "Bill Williams"],
             "threshold_pct": 0.015,
             "window": 3,
             "clustering_pct": 0.02,
@@ -30,28 +30,18 @@ class SupportResistance(Feature):
         }
 
     @property
-    def parameter_options(self) -> Dict[str, List[Any]]:
-        return {
-            "method": ["ZigZag", "Savitzky-Golay", "Bill Williams"]
-        }
-
-    @property
     def output_schema(self) -> List[OutputSchema]:
         return [
-            # ML-safe time series for strategies
-            OutputSchema(name="dist_to_support",    output_type=OutputType.LINE, pane=Pane.NEW),
-            OutputSchema(name="dist_to_resistance", output_type=OutputType.LINE, pane=Pane.NEW),
             OutputSchema(name="last_support_level",    output_type=OutputType.LINE, pane=Pane.OVERLAY),
             OutputSchema(name="last_resistance_level", output_type=OutputType.LINE, pane=Pane.OVERLAY),
-            # Clustered price levels for GUI visualization
             OutputSchema(name="levels", output_type=OutputType.LEVEL, pane=Pane.OVERLAY),
         ]
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
-        method = params.get("method", "Bill Williams")
-        threshold = float(params.get("threshold_pct", 0.015))
-        window = int(params.get("window", 3))
-        clustering_pct = float(params.get("clustering_pct", 0.02))
+        method = params.get("method") or "Bill Williams"
+        threshold = float(params.get("threshold_pct") or 0.015)
+        window = int(params.get("window") or 3)
+        clustering_pct = float(params.get("clustering_pct") or 0.02)
 
         # Extract price pivots based on the selected method
         pivots = []
