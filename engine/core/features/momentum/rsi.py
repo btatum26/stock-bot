@@ -24,6 +24,15 @@ class RSI(Feature):
             OutputSchema(name="overbought", output_type=OutputType.LEVEL, pane=Pane.NEW),
             OutputSchema(name="oversold", output_type=OutputType.LEVEL, pane=Pane.NEW),
         ]
+        
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "period": 14, #Lookback period for RSI calculation.
+            "overbought": 70.0, # Overbought threshold level.
+            "oversold": 30.0, # Oversold threshold level.
+            "normalize": "none" # Normalization method to apply to the RSI values.
+        }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         period = int(params.get("period", 14))
