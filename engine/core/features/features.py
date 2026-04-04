@@ -218,15 +218,15 @@ class FeatureOrchestrator:
                 self._raise_memory_violation(feature_id)
 
             if result.data:
+                new_cols = {}
                 for col_name, series in result.data.items():
                     if col_name not in computed_features:
                         computed_features[col_name] = series
                         cache.set_series(col_name, series)
-
-        if computed_features:
-            new_features_df = pd.DataFrame(computed_features)
-            df = pd.concat([df, new_features_df], axis=1)
-            df = df.loc[:, ~df.columns.duplicated()]
+                        new_cols[col_name] = series
+                if new_cols:
+                    df = pd.concat([df, pd.DataFrame(new_cols)], axis=1)
+                    df = df.loc[:, ~df.columns.duplicated()]
             
         return df, l_max
 
