@@ -20,6 +20,7 @@ class LineOutput(FeatureOutput):
     data: List[Any]
     color: str = "#ffffff"
     width: float = 1.5
+    schema_name: str = ""
 
 
 @dataclass
@@ -30,6 +31,7 @@ class LevelOutput(FeatureOutput):
     max_price: float = 0.0
     strength: float = 1.0
     color: str = "#0000ff"
+    schema_name: str = ""
 
 
 @dataclass
@@ -39,6 +41,7 @@ class MarkerOutput(FeatureOutput):
     values: List[float] = field(default_factory=list)
     color: str = "#ffffff"
     shape: str = "o"
+    schema_name: str = ""
 
 
 @dataclass

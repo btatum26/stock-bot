@@ -102,10 +102,30 @@ class AdaptedFeature(GUIFeature):
     @property
     def parameters(self) -> Dict[str, Any]:
         base = dict(self._engine.parameters)
-        # Inject a color param for the GUI if the feature doesn't have one
-        if "color" not in base:
-            base["color"] = _color_for_feature(self._engine)
+        # Inject per-output color params for LINE outputs.
+        # Single-line features get a plain "color"; multi-line features get
+        # "color_<output_name>" for each LINE so the user can control each
+        # line independently.
+        line_outputs = [s for s in self._engine.output_schema
+                        if s.output_type == OutputType.LINE]
+        if len(line_outputs) == 1:
+            if "color" not in base:
+                base["color"] = _color_for_feature(self._engine)
+        else:
+            for i, schema in enumerate(line_outputs):
+                key = f"color_{schema.name}" if schema.name else "color"
+                if key not in base:
+                    base[key] = _color_for_feature(self._engine, i)
         return base
+
+    @property
+    def output_names(self) -> List[str]:
+        """Short schema names for all renderable outputs (LINE, HISTOGRAM, MARKER)."""
+        return [
+            s.name for s in self._engine.output_schema
+            if s.output_type in (OutputType.LINE, OutputType.HISTOGRAM, OutputType.MARKER)
+            and s.name
+        ]
 
     @property
     def target_pane(self) -> str:
@@ -125,6 +145,11 @@ class AdaptedFeature(GUIFeature):
         return None
 
     @property
+    def source_param_keys(self) -> List[str]:
+        """Parameter keys that are dynamic column selectors (e.g. high_col, low_col)."""
+        return getattr(self._engine, 'source_param_keys', [])
+
+    @property
     def y_padding(self) -> float:
         return 0.05 if self.y_range else 0.0
 
@@ -136,32 +161,45 @@ class AdaptedFeature(GUIFeature):
         engine_params = {k: v for k, v in params.items()
                          if k not in ("color",) and not k.startswith("color_")}
 
+        # Strip source-selector params from column-name generation so that
+        # selecting "RSI" vs "Price" doesn't change the output column names.
+        _source_keys = set(getattr(self._engine, 'source_param_keys', []))
+        name_params = {k: v for k, v in engine_params.items() if k not in _source_keys}
+
         # Compute via engine with a shared cache for dependency optimization
         cache = FeatureCache()
         engine_result: EngineResult = self._engine.compute(df, engine_params, cache)
 
         visuals = []
-        line_color = params.get("color", _color_for_feature(self._engine))
+        # Determine whether we're in single-color or per-output-color mode
+        line_outputs = [s for s in self._engine.output_schema
+                        if s.output_type == OutputType.LINE]
+        multi_color = len(line_outputs) > 1
 
         # --- Build visuals from output_schema ---
         line_idx = 0
         for schema in self._engine.output_schema:
 
             if schema.output_type == OutputType.LINE:
-                col_name = self._engine.generate_column_name(self._id, engine_params, schema.name)
+                col_name = self._engine.generate_column_name(self._id, name_params, schema.name)
                 series = (engine_result.data or {}).get(col_name)
                 if series is not None:
-                    color = line_color if line_idx == 0 else _PALETTE[(line_idx) % len(_PALETTE)]
+                    if multi_color:
+                        color_key = f"color_{schema.name}" if schema.name else "color"
+                        color = params.get(color_key, _color_for_feature(self._engine, line_idx))
+                    else:
+                        color = params.get("color", _color_for_feature(self._engine))
                     visuals.append(LineOutput(
                         name=col_name,
                         data=series.where(pd.notnull(series), None).tolist(),
                         color=color,
                         width=_DEFAULT_LINE_WIDTH,
+                        schema_name=schema.name,
                     ))
                     line_idx += 1
 
             elif schema.output_type == OutputType.HISTOGRAM:
-                col_name = self._engine.generate_column_name(self._id, engine_params, schema.name)
+                col_name = self._engine.generate_column_name(self._id, name_params, schema.name)
                 series = (engine_result.data or {}).get(col_name)
                 if series is not None:
                     # Render histogram as a line for now — the GUI can upgrade
@@ -171,24 +209,27 @@ class AdaptedFeature(GUIFeature):
                         data=series.where(pd.notnull(series), None).tolist(),
                         color="#888888",
                         width=1.0,
+                        schema_name=schema.name,
                     ))
 
             elif schema.output_type == OutputType.MARKER:
-                col_name = self._engine.generate_column_name(self._id, engine_params, schema.name)
+                col_name = self._engine.generate_column_name(self._id, name_params, schema.name)
                 series = (engine_result.data or {}).get(col_name)
                 if series is not None:
-                    non_null = series.dropna()
+                    non_null = series[series.astype(bool)]
                     if not non_null.empty:
                         # Map index positions to integer x coords
                         idx_positions = [df.index.get_loc(i) for i in non_null.index
                                          if i in df.index]
                         values = non_null.tolist()[:len(idx_positions)]
+                        marker_color = params.get("color", _color_for_feature(self._engine))
                         visuals.append(MarkerOutput(
                             name=col_name,
                             indices=idx_positions,
                             values=values,
-                            color=line_color,
+                            color=marker_color,
                             shape="t" if any(v > 0 for v in values) else "d",
+                            schema_name=schema.name,
                         ))
 
             elif schema.output_type == OutputType.LEVEL:
