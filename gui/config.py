@@ -33,3 +33,6 @@ DEFAULT_TICKERS = ["AAPL", "MSFT", "GOOGL"]
 
 # --- Signal chart default view window (bars) ---
 SIGNAL_CHART_VIEW_BARS = 252
+
+# --- Maximum bars loaded into the chart (tail slice) ---
+MAX_CHART_BARS = 1500

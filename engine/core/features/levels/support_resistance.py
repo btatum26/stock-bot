@@ -1,4 +1,5 @@
 from typing import Dict, Any, List
+import bisect
 import pandas as pd
 import numpy as np
 from scipy.signal import savgol_filter
@@ -32,8 +33,13 @@ class SupportResistance(Feature):
     @property
     def output_schema(self) -> List[OutputSchema]:
         return [
-            OutputSchema(name="last_support_level",    output_type=OutputType.LINE, pane=Pane.OVERLAY),
-            OutputSchema(name="last_resistance_level", output_type=OutputType.LINE, pane=Pane.OVERLAY),
+            OutputSchema(name="last_support_level",        output_type=OutputType.LINE,  pane=Pane.OVERLAY),
+            OutputSchema(name="last_resistance_level",     output_type=OutputType.LINE,  pane=Pane.OVERLAY),
+            OutputSchema(name="nearest_support_level",     output_type=OutputType.LINE,  pane=Pane.OVERLAY),
+            OutputSchema(name="nearest_resistance_level",  output_type=OutputType.LINE,  pane=Pane.OVERLAY),
+            # nearest_support_strength / nearest_resistance_strength are computed in
+            # data_dict for model consumption but omitted from output_schema — they are
+            # integer counts that would distort the price-axis and trigger a new sub-pane.
             OutputSchema(name="levels", output_type=OutputType.LEVEL, pane=Pane.OVERLAY),
         ]
 
@@ -73,21 +79,82 @@ class SupportResistance(Feature):
         rolling_supp = supp_series.ffill()
         rolling_res = res_series.ffill()
 
+        # --- Rolling nearest support / resistance with strength (no look-ahead) ---
+        # At each bar, scan all confirmed pivots up to that bar.
+        # "nearest support" = highest confirmed support at or below current close.
+        # "nearest resistance" = lowest confirmed resistance at or above current close.
+        # Strength = number of pivots that cluster within clustering_pct of that level.
+        # Uses binary search (O(n log k)) for performance on long series.
+        close_vals = df['close'].values
+        supp_vals  = supp_series.values
+        res_vals   = res_series.values
+        n_bars     = len(df)
+
+        near_supp_arr = np.full(n_bars, np.nan)
+        near_supp_str = np.zeros(n_bars)
+        near_res_arr  = np.full(n_bars, np.nan)
+        near_res_str  = np.zeros(n_bars)
+
+        running_supps: list = []   # maintained in sorted order
+        running_ress: list  = []   # maintained in sorted order
+
+        for i in range(n_bars):
+            s = supp_vals[i]
+            r = res_vals[i]
+            if not np.isnan(s):
+                bisect.insort(running_supps, float(s))
+            if not np.isnan(r):
+                bisect.insort(running_ress, float(r))
+
+            c = float(close_vals[i])
+
+            # Nearest support at or below close
+            pos = bisect.bisect_right(running_supps, c) - 1
+            if pos >= 0:
+                ns = running_supps[pos]
+                near_supp_arr[i] = ns
+                lo = bisect.bisect_left(running_supps,  ns * (1.0 - clustering_pct))
+                hi = bisect.bisect_right(running_supps, ns * (1.0 + clustering_pct))
+                near_supp_str[i] = float(hi - lo)
+
+            # Nearest resistance at or above close
+            pos = bisect.bisect_left(running_ress, c)
+            if pos < len(running_ress):
+                nr = running_ress[pos]
+                near_res_arr[i] = nr
+                lo = bisect.bisect_left(running_ress,  nr * (1.0 - clustering_pct))
+                hi = bisect.bisect_right(running_ress, nr * (1.0 + clustering_pct))
+                near_res_str[i] = float(hi - lo)
+
+        nearest_support_level    = pd.Series(near_supp_arr, index=df.index)
+        nearest_support_strength = pd.Series(near_supp_str, index=df.index)
+        nearest_resistance_level    = pd.Series(near_res_arr, index=df.index)
+        nearest_resistance_strength = pd.Series(near_res_str, index=df.index)
+
         # Calculate percentage distance from current price to the last confirmed levels
         dist_to_supp = (df['close'] - rolling_supp) / df['close']
         dist_to_res = (rolling_res - df['close']) / df['close']
 
         # Standardize column names
-        col_dist_supp = self.generate_column_name("SupportResistance", params, "dist_to_support")
-        col_dist_res = self.generate_column_name("SupportResistance", params, "dist_to_resistance")
-        col_last_supp = self.generate_column_name("SupportResistance", params, "last_support_level")
-        col_last_res = self.generate_column_name("SupportResistance", params, "last_resistance_level")
+        G = self.generate_column_name
+        col_dist_supp        = G("SupportResistance", params, "dist_to_support")
+        col_dist_res         = G("SupportResistance", params, "dist_to_resistance")
+        col_last_supp        = G("SupportResistance", params, "last_support_level")
+        col_last_res         = G("SupportResistance", params, "last_resistance_level")
+        col_near_supp        = G("SupportResistance", params, "nearest_support_level")
+        col_near_supp_str    = G("SupportResistance", params, "nearest_support_strength")
+        col_near_res         = G("SupportResistance", params, "nearest_resistance_level")
+        col_near_res_str     = G("SupportResistance", params, "nearest_resistance_strength")
 
         data_dict = {
-            col_dist_supp: dist_to_supp.fillna(0.0),
-            col_dist_res: dist_to_res.fillna(0.0),
-            col_last_supp: rolling_supp.fillna(df['close']),
-            col_last_res: rolling_res.fillna(df['close'])
+            col_dist_supp:     dist_to_supp.fillna(0.0),
+            col_dist_res:      dist_to_res.fillna(0.0),
+            col_last_supp:     rolling_supp.fillna(df['close']),
+            col_last_res:      rolling_res.fillna(df['close']),
+            col_near_supp:     nearest_support_level,
+            col_near_supp_str: nearest_support_strength,
+            col_near_res:      nearest_resistance_level,
+            col_near_res_str:  nearest_resistance_strength,
         }
 
         # Cluster pivots into significant levels for visualization

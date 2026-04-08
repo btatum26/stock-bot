@@ -15,12 +15,13 @@ act (respecting its own _suppress_sync flag).
 import logging
 
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QCheckBox
 
 from ..features.base import LineOutput, LevelOutput, MarkerOutput, FeatureResult
 from ..gui_components.plots import UnifiedPlot, LineOverlay, LevelOverlay
 from ..colors import BG_MAIN, CHART_CROSSHAIR
+from ..config import MAX_CHART_BARS
 
 
 class FeatureManager(QObject):
@@ -45,12 +46,25 @@ class FeatureManager(QObject):
         self._v_lines       = v_lines    # shared list owned by ChartWindow
         self._df            = None       # kept in sync by ChartWindow.load_chart
 
+        # Debounce timer for parameter changes — batches rapid edits into a
+        # single recompute + sync instead of firing on every keystroke/click.
+        self._pending_param_feats: set = set()
+        self._param_debounce = QTimer(self)
+        self._param_debounce.setSingleShot(True)
+        self._param_debounce.setInterval(300)
+        self._param_debounce.timeout.connect(self._flush_param_changes)
+
     # -----------------------------------------------------------------------
     # DataFrame sync
     # -----------------------------------------------------------------------
 
     def set_df(self, df) -> None:
         self._df = df
+        if df is not None:
+            total = len(df)
+            for plot in self.sub_plots.values():
+                plot.getViewBox().setLimits(
+                    xMin=-0.5, xMax=total + 0.5, maxXRange=MAX_CHART_BARS)
 
     # -----------------------------------------------------------------------
     # Public API — feature lifecycle
@@ -97,6 +111,11 @@ class FeatureManager(QObject):
                     feature.y_range[0], feature.y_range[1], padding=feature.y_padding)
             new_plot.setXLink(self._main_plot)
             new_plot.getAxis("left").setWidth(40)
+            # Match main plot's pan/zoom limits
+            if self._df is not None:
+                total = len(self._df)
+                new_plot.getViewBox().setLimits(
+                    xMin=-0.5, xMax=total + 0.5, maxXRange=MAX_CHART_BARS)
             new_pw.addItem(new_plot)
             plot_target = new_plot
             self.sub_plots[feat_name] = new_plot
@@ -155,7 +174,7 @@ class FeatureManager(QObject):
         if sync:
             self.sync_needed.emit()
 
-    def update(self, feat_name: str) -> None:
+    def update(self, feat_name: str, cache=None) -> None:
         """Recompute and re-render a single feature using the current df."""
         df = self._df
         if df is None or df.empty:
@@ -169,7 +188,7 @@ class FeatureManager(QObject):
         aug_df = self._augment_df(df, feat_name, feat, params)
 
         try:
-            result = feat.compute(aug_df, params)
+            result = feat.compute(aug_df, params, cache=cache)
             if isinstance(result, FeatureResult):
                 results = result.visuals
                 data["raw_data"] = result.data
@@ -179,9 +198,10 @@ class FeatureManager(QObject):
             logging.error(f"Error computing {feat_name}: {e}")
             return
 
-        for o in data["overlays"]:
-            plot.remove_overlay(o)
-        data["overlays"] = []
+        # Index existing overlays by name for reuse
+        old_overlays = {getattr(o, '_feat_key', None): o for o in data["overlays"]}
+        new_overlay_list = []
+        reused = set()
 
         for item in data.get("temp_items", []):
             plot.removeItem(item)
@@ -193,13 +213,35 @@ class FeatureManager(QObject):
             if sname in visibility and not visibility[sname].isChecked():
                 continue
             if isinstance(res, LineOutput):
-                o = LineOverlay({res.name: res.data}, color=res.color, width=res.width)
-                plot.add_overlay(o)
-                data["overlays"].append(o)
+                key = ("line", res.name)
+                existing = old_overlays.get(key)
+                if existing is not None:
+                    # Reuse — just push new data through setData()
+                    existing.data_dict = {res.name: res.data}
+                    existing.update(df)
+                    new_overlay_list.append(existing)
+                    reused.add(key)
+                else:
+                    o = LineOverlay({res.name: res.data}, color=res.color, width=res.width)
+                    o._feat_key = key
+                    plot.add_overlay(o)
+                    o.update(df)
+                    new_overlay_list.append(o)
             elif isinstance(res, LevelOutput):
-                o = LevelOverlay(res.min_price, color=res.color)
-                plot.add_overlay(o)
-                data["overlays"].append(o)
+                key = ("level", res.name)
+                existing = old_overlays.get(key)
+                if existing is not None and existing.price == res.min_price:
+                    new_overlay_list.append(existing)
+                    reused.add(key)
+                else:
+                    if existing is not None:
+                        plot.remove_overlay(existing)
+                        reused.add(key)
+                    o = LevelOverlay(res.min_price, color=res.color)
+                    o._feat_key = key
+                    plot.add_overlay(o)
+                    o.update(df)
+                    new_overlay_list.append(o)
             elif isinstance(res, MarkerOutput):
                 sym = {"o": "o", "d": "d", "t": "t1", "s": "s", "x": "x", "+": "+"}.get(
                     res.shape, "o")
@@ -209,12 +251,24 @@ class FeatureManager(QObject):
                 plot.addItem(item)
                 data.setdefault("temp_items", []).append(item)
 
-        plot.update_all(df)
+        # Remove overlays that weren't reused
+        for key, o in old_overlays.items():
+            if key not in reused:
+                plot.remove_overlay(o)
+
+        data["overlays"] = new_overlay_list
+        plot.auto_scale_y()
 
     def update_all(self) -> None:
-        """Recompute and re-render every active feature."""
+        """Recompute and re-render every active feature with a shared cache."""
+        from engine.core.features.features import FeatureCache
+        cache = FeatureCache()
         for name in list(self.active_features.keys()):
-            self.update(name)
+            self.update(name, cache=cache)
+        # Single Y-rescale after all features are done
+        self._main_plot.auto_scale_y()
+        for plot in self.sub_plots.values():
+            plot.auto_scale_y()
 
     def clear_all(self) -> None:
         """Remove all active features without emitting sync_needed."""
@@ -313,8 +367,21 @@ class FeatureManager(QObject):
     # -----------------------------------------------------------------------
 
     def _on_param_changed(self, feat_name: str) -> None:
-        """Called by each feature widget when any parameter changes."""
-        self.update(feat_name)
+        """Called by each feature widget when any parameter changes.
+
+        Batches rapid edits via a 300 ms debounce so we don't recompute +
+        write to disk on every single keystroke or checkbox toggle.
+        """
+        self._pending_param_feats.add(feat_name)
+        self._param_debounce.start()
+
+    def _flush_param_changes(self) -> None:
+        """Actually recompute features and emit sync after the debounce window."""
+        pending = list(self._pending_param_feats)
+        self._pending_param_feats.clear()
+        for name in pending:
+            if name in self.active_features:
+                self.update(name)
         self.sync_needed.emit()
 
     def _read_params(self, data: dict) -> dict:
@@ -342,10 +409,8 @@ class FeatureManager(QObject):
                         break
         if not extra:
             return df
-        aug = df.copy()
-        for col, series in extra.items():
-            aug[col] = series
-        return aug
+        # assign() shares existing column arrays — much cheaper than copy()
+        return df.assign(**extra)
 
     def _reorganize_subplots(self) -> None:
         """Distribute vertical space evenly between the main plot and sub-plots."""

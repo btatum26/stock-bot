@@ -10,6 +10,7 @@ never from the engine.
 """
 
 from typing import Dict, Any, List, Optional
+import numpy as np
 import pandas as pd
 
 from engine.core.features.base import (
@@ -146,7 +147,7 @@ class AdaptedFeature(GUIFeature):
 
     # --- Computation ---
 
-    def compute(self, df: pd.DataFrame, params: Dict[str, Any]) -> GUIResult:
+    def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache=None) -> GUIResult:
         """Run the engine feature and translate the result into GUI visuals."""
         # Strip GUI-only params before passing to engine
         engine_params = {k: v for k, v in params.items()
@@ -157,8 +158,9 @@ class AdaptedFeature(GUIFeature):
         _source_keys = set(getattr(self._engine, 'source_param_keys', []))
         name_params = {k: v for k, v in engine_params.items() if k not in _source_keys}
 
-        # Compute via engine with a shared cache for dependency optimization
-        cache = FeatureCache()
+        # Compute via engine — reuse shared cache when provided
+        if cache is None:
+            cache = FeatureCache()
         engine_result: EngineResult = self._engine.compute(df, engine_params, cache)
 
         visuals = []
@@ -182,7 +184,7 @@ class AdaptedFeature(GUIFeature):
                         color = params.get("color", _color_for_feature(self._engine))
                     visuals.append(LineOutput(
                         name=col_name,
-                        data=series.where(pd.notnull(series), None).tolist(),
+                        data=series.to_numpy(dtype=np.float64, na_value=np.nan),
                         color=color,
                         width=_DEFAULT_LINE_WIDTH,
                         schema_name=schema.name,
@@ -197,7 +199,7 @@ class AdaptedFeature(GUIFeature):
                     # to a bar renderer later without changing the engine
                     visuals.append(LineOutput(
                         name=col_name,
-                        data=series.where(pd.notnull(series), None).tolist(),
+                        data=series.to_numpy(dtype=np.float64, na_value=np.nan),
                         color="#888888",
                         width=1.0,
                         schema_name=schema.name,

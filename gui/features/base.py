@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
+
+import numpy as np
 import pandas as pd
 
 
@@ -17,7 +19,7 @@ class FeatureOutput:
 @dataclass
 class LineOutput(FeatureOutput):
     """A continuous line overlay on the chart."""
-    data: List[Any]
+    data: Any  # numpy array (preferred) or list
     color: str = "#ffffff"
     width: float = 1.5
     schema_name: str = ""

@@ -35,11 +35,15 @@ class RSIDivergenceModel(SignalModel):
     ) -> pd.Series:
 
         f = context.features
-        n         = int(params.get("fractal_n",         context.params.fractal_n))
-        min_div   = float(params.get("min_divergence_rsi",  context.params.min_divergence_rsi))
-        max_hold  = int(params.get("max_hold_bars",         context.params.max_hold_bars))
-        bull_thr  = float(params.get("rsi_bull_threshold",  context.params.rsi_bull_threshold))
-        bear_thr  = float(params.get("rsi_bear_threshold",  context.params.rsi_bear_threshold))
+        n            = int(params.get("fractal_n",            context.params.fractal_n))
+        min_div      = float(params.get("min_divergence_rsi", context.params.min_divergence_rsi))
+        max_hold     = int(params.get("max_hold_bars",        context.params.max_hold_bars))
+        bull_thr     = float(params.get("rsi_bull_threshold", context.params.rsi_bull_threshold))
+        bear_thr     = float(params.get("rsi_bear_threshold", context.params.rsi_bear_threshold))
+        # NOTE: rsi_bull_threshold defaults to 70 in context — set it to 45-50 in the GUI
+        # for meaningful oversold filtering.
+        support_tol  = float(params.get("support_tolerance_pct", 0.015))   # ±1.5% of support level
+        min_bars     = int(params.get("min_bars_since_high",      5))
 
         # ------------------------------------------------------------------
         # Pull columns
@@ -53,6 +57,19 @@ class RSIDivergenceModel(SignalModel):
 
         cur_lo_px  = df[f.FRACTAL_LOW_PRICE]
         prev_lo_px = df[f.PREV_FRACTAL_LOW]
+
+        # Prefer nearest_support_level (closest active support below price) when available.
+        # Falls back to last_support_level if the manifest hasn't been synced yet.
+        _near_supp_col = getattr(f, "NEAREST_SUPPORT_LEVEL", None)
+        _near_supp_str_col = getattr(f, "NEAREST_SUPPORT_STRENGTH", None)
+        if _near_supp_col and _near_supp_col in df.columns:
+            support          = df[_near_supp_col]
+            support_strength = df[_near_supp_str_col] if _near_supp_str_col and _near_supp_str_col in df.columns else pd.Series(1.0, index=df.index)
+        else:
+            support          = df[f.LAST_SUPPORT_LEVEL]
+            support_strength = pd.Series(1.0, index=df.index)
+
+        bars_since_hi  = df[f.BARS_SINCE_LAST_HIGH]
 
         # RSI at the actual swing-point (T-n), read at the confirmation bar (T)
         rsi_at_bar = rsi.shift(n)
@@ -75,10 +92,22 @@ class RSIDivergenceModel(SignalModel):
         # ------------------------------------------------------------------
         # Bullish divergence
         #   Fractal low confirmed  +  lower price low  +  higher RSI low
-        #   +  RSI gap >= min_divergence_rsi  +  not already overbought
+        #   +  RSI gap >= min_divergence_rsi  +  RSI below threshold
+        #   +  price near support  +  enough bars since last swing high
         # ------------------------------------------------------------------
         both_lo_valid = cur_lo_px.notna() & prev_lo_px.notna()
         rsi_bull_gap  = cur_lo_rsi - prev_lo_rsi       # positive = higher RSI low
+
+        # Support confluence: fractal low must land within ±support_tol of the last support level.
+        support_valid = support.notna() & (support > 0)
+        near_support  = (
+            support_valid
+            & (cur_lo_px >= support * (1.0 - support_tol))
+            & (cur_lo_px <= support * (1.0 + support_tol))
+        )
+
+        # Trend exhaustion: require a minimum downtrend duration before calling a reversal.
+        enough_bars = bars_since_hi.notna() & (bars_since_hi >= min_bars)
 
         bull_mask = (
             frac_low
@@ -86,6 +115,8 @@ class RSIDivergenceModel(SignalModel):
             & (cur_lo_px  < prev_lo_px)
             & (rsi_bull_gap >= min_div)
             & (rsi <= bull_thr)
+            & near_support
+            & enough_bars
         )
 
         # ------------------------------------------------------------------
@@ -106,9 +137,19 @@ class RSIDivergenceModel(SignalModel):
 
         # ------------------------------------------------------------------
         # Conviction: scale divergence gap to [0, 1] (30-pt soft cap)
+        # Bull signals get a proximity boost: exactly at support = 1.0x,
+        # at the edge of the tolerance band = 0.5x.
         # ------------------------------------------------------------------
         SCALE = 30.0
-        bull_conviction = (rsi_bull_gap / SCALE).clip(0.0, 1.0)
+        rsi_bull_score = (rsi_bull_gap / SCALE).clip(0.0, 1.0)
+
+        support_dist   = (cur_lo_px - support).abs() / support.replace(0, np.nan)
+        proximity      = (1.0 - (support_dist / support_tol).clip(0.0, 1.0)).fillna(0.0)
+
+        # Strength bonus: cap at 5 touches → 1.0, scale 0.8–1.0 so a weak level doesn't zero out
+        strength_factor = (support_strength.clip(upper=5.0) / 5.0).clip(0.0, 1.0) * 0.2 + 0.8
+        bull_conviction = rsi_bull_score * (0.5 + 0.5 * proximity) * strength_factor
+
         bear_conviction = (rsi_bear_gap / SCALE).clip(0.0, 1.0)
 
         raw = pd.Series(0.0, index=df.index)

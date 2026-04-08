@@ -2,6 +2,7 @@ import os
 import logging
 import sys
 
+import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
@@ -24,7 +25,7 @@ from .chart.feature_manager import FeatureManager
 from .chart.manifest_manager import ManifestManager
 
 from .colors import ACCENT_GREEN, BG_MAIN, CHART_AXIS, CHART_CROSSHAIR, SIGNAL_EXIT, SIGNAL_LONG, SIGNAL_SHORT
-from .config import LOAD_DEBOUNCE_MS, PERIOD_BARS, SIDEBAR_MIN_WIDTH, WORKSPACE_DIR, DB_PATH
+from .config import LOAD_DEBOUNCE_MS, MAX_CHART_BARS, PERIOD_BARS, SIDEBAR_MIN_WIDTH, WORKSPACE_DIR, DB_PATH
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +41,7 @@ class SignalPreviewWorker(QThread):
         super().__init__()
         self._strategy_dir = strategy_dir
         self._ticker = ticker
-        self._df = df.copy()
+        self._df = df
 
     def run(self):
         try:
@@ -395,12 +396,11 @@ class ChartWindow(QMainWindow):
         low_arr  = self.df["Low"].values  if "Low"  in self.df.columns else self.df["low"].values
 
         def _scatter(mask, y_arr, color, symbol):
-            xs = [i for i, v in enumerate(mask) if v]
-            ys = [float(y_arr[i]) for i in xs]
-            if not xs:
+            xs = np.where(mask)[0]
+            if len(xs) == 0:
                 return None
             return pg.ScatterPlotItem(
-                x=xs, y=ys,
+                x=xs, y=y_arr[xs],
                 brush=pg.mkBrush(color), pen=pg.mkPen(None),
                 symbol=symbol, size=12)
 
@@ -507,10 +507,11 @@ class ChartWindow(QMainWindow):
         period = self.controls.period_combo.currentText()
         n      = PERIOD_BARS.get(period)
         total  = len(self.df)
-        if n is None or n >= total:
-            self.main_plot.getViewBox().setXRange(0, total)
-        else:
-            self.main_plot.getViewBox().setXRange(total - n, total)
+        if n is None:
+            # "All" — show up to MAX_CHART_BARS from the end
+            n = min(total, MAX_CHART_BARS)
+        n = min(n, total)
+        self.main_plot.getViewBox().setXRange(total - n, total)
 
     def load_chart(self):
         self._load_timer.stop()
@@ -546,6 +547,11 @@ class ChartWindow(QMainWindow):
         )
 
         self.main_plot.update_all(self.df)
+
+        # Constrain the ViewBox: full pan range, but max zoom-out = MAX_CHART_BARS
+        total = len(self.df)
+        vb = self.main_plot.getViewBox()
+        vb.setLimits(xMin=-0.5, xMax=total + 0.5, maxXRange=MAX_CHART_BARS)
 
         # Update feature manager with the new df before re-rendering
         self._feature_manager.set_df(self.df)
