@@ -29,7 +29,7 @@ class ParamsContext:
     min_divergence_rsi: float = 5.0
     max_hold_bars: int = 20
     rsi_bull_threshold: float = 55.0
-    rsi_bear_threshold: float = 45.0
+    rsi_bear_threshold: float = 65.0
 
 
 @dataclass(frozen=True)

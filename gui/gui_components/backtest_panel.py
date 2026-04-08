@@ -30,74 +30,6 @@ from .plots import UnifiedPlot, CandleOverlay
 
 
 # ---------------------------------------------------------------------------
-# Shared utility: regenerate context.py from feature list + hyperparameters
-# ---------------------------------------------------------------------------
-
-def _write_context_py(strategy_dir: str, features_list: list, hparams: dict):
-    """Regenerate context.py from the current feature list and hyperparameters."""
-    from engine.core.features.base import FEATURE_REGISTRY, OutputType
-
-    DATA_TYPES = (OutputType.LINE, OutputType.HISTOGRAM, OutputType.MARKER)
-
-    lines = [
-        "# AUTO-GENERATED. Do not edit — updated by the GUI when features change.",
-        "from dataclasses import dataclass, field",
-        "",
-        "",
-        "@dataclass(frozen=True)",
-        "class FeaturesContext:",
-        '    """Typed mapping from strategy features to DataFrame column names."""',
-    ]
-
-    seen_attrs: set = set()
-    for entry in features_list:
-        fid    = entry["id"]
-        params = entry.get("params", {})
-        if fid not in FEATURE_REGISTRY:
-            continue
-        feat          = FEATURE_REGISTRY[fid]()
-        data_outputs  = [s for s in feat.output_schema if s.output_type in DATA_TYPES]
-        source_keys   = set(getattr(feat, 'source_param_keys', []))
-        name_params   = {k: v for k, v in params.items() if k not in source_keys}
-
-        for schema in data_outputs:
-            col_name = feat.generate_column_name(fid, name_params, schema.name)
-            if schema.name:
-                attr = schema.name.upper().replace(" ", "_").replace("-", "_")
-            else:
-                attr = col_name
-            if attr in seen_attrs:
-                attr = f"{fid.upper().replace(' ', '_')}_{attr}"
-            seen_attrs.add(attr)
-            lines.append(f"    {attr}: str = '{col_name}'")
-
-    lines += [
-        "",
-        "",
-        "@dataclass(frozen=True)",
-        "class ParamsContext:",
-        '    """Typed strategy hyperparameters."""',
-    ]
-    for k, v in hparams.items():
-        hint = "float" if isinstance(v, float) else "int" if isinstance(v, int) else "str"
-        lines.append(f"    {k}: {hint} = {repr(v)}")
-
-    lines += [
-        "",
-        "",
-        "@dataclass(frozen=True)",
-        "class Context:",
-        '    """Master context object."""',
-        "    features: FeaturesContext = field(default_factory=FeaturesContext)",
-        "    params:   ParamsContext   = field(default_factory=ParamsContext)",
-        "",
-    ]
-
-    with open(os.path.join(strategy_dir, "context.py"), "w") as f:
-        f.write("\n".join(lines))
-
-
-# ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
 
@@ -493,7 +425,7 @@ class BacktestPanel(QWidget):
         try:
             with open(manifest_path, "w") as f:
                 json.dump(manifest, f, indent=4)
-            _write_context_py(strategy_dir, manifest.get("features", []), hparams)
+            self._engine.write_context_py(name, manifest.get("features", []), hparams)
         except Exception as e:
             self._log(f"Manifest save failed: {e}")
 

@@ -33,21 +33,12 @@ from .base import (
 # ---------------------------------------------------------------------------
 # Theme — default rendering config per category/output type
 # ---------------------------------------------------------------------------
-# Palette of colors cycled for multi-line features
-_PALETTE = ["#aaff00", "#00bfff", "#ff6b6b", "#ffd700", "#da70d6", "#00fa9a"]
-
-_CATEGORY_COLORS = {
-    "Oscillators (Momentum)": "#aaff00",
-    "Volatility":             "#00bfff",
-    "Trend":                  "#ffd700",
-    "Volume":                 "#da70d6",
-    "Price Levels":           "#ff6b6b",
-}
-
-_LEVEL_COLORS = {
-    "Overbought": "#ff4444",
-    "Oversold":   "#44ff44",
-}
+from ..colors import (
+    FEATURE_PALETTE as _PALETTE,
+    FEATURE_CATEGORY_COLORS as _CATEGORY_COLORS,
+    LEVEL_COLORS as _LEVEL_COLORS,
+    TEXT_MUTED as _COLOR_NEUTRAL_LEVEL,
+)
 
 _DEFAULT_LINE_WIDTH = 1.5
 
@@ -56,10 +47,10 @@ def _color_for_level(label: str) -> str:
     """Pick a color for a level based on its label."""
     label_lower = label.lower()
     if "overbought" in label_lower or "high" in label_lower:
-        return "#ff4444"
+        return _LEVEL_COLORS["Overbought"]
     if "oversold" in label_lower or "low" in label_lower:
-        return "#44ff44"
-    return "#888888"
+        return _LEVEL_COLORS["Oversold"]
+    return _COLOR_NEUTRAL_LEVEL
 
 
 def _color_for_feature(engine_feat: EngineFeature, idx: int = 0) -> str:

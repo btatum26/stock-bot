@@ -38,6 +38,10 @@ class SupportResistance(Feature):
         ]
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
+        # Normalize column names: GUI capitalizes, engine uses lowercase
+        df = df.rename(columns={'High': 'high', 'Low': 'low', 'Close': 'close',
+                                 'Open': 'open', 'Volume': 'volume'})
+
         method = params.get("method") or "Bill Williams"
         threshold = float(params.get("threshold_pct") or 0.015)
         window = int(params.get("window") or 3)
@@ -70,8 +74,8 @@ class SupportResistance(Feature):
         rolling_res = res_series.ffill()
 
         # Calculate percentage distance from current price to the last confirmed levels
-        dist_to_supp = (df['Close'] - rolling_supp) / df['Close']
-        dist_to_res = (rolling_res - df['Close']) / df['Close']
+        dist_to_supp = (df['close'] - rolling_supp) / df['close']
+        dist_to_res = (rolling_res - df['close']) / df['close']
 
         # Standardize column names
         col_dist_supp = self.generate_column_name("SupportResistance", params, "dist_to_support")
@@ -82,8 +86,8 @@ class SupportResistance(Feature):
         data_dict = {
             col_dist_supp: dist_to_supp.fillna(0.0),
             col_dist_res: dist_to_res.fillna(0.0),
-            col_last_supp: rolling_supp.fillna(df['Close']),
-            col_last_res: rolling_res.fillna(df['Close'])
+            col_last_supp: rolling_supp.fillna(df['close']),
+            col_last_res: rolling_res.fillna(df['close'])
         }
 
         # Cluster pivots into significant levels for visualization
@@ -95,8 +99,8 @@ class SupportResistance(Feature):
 
     def get_pivots_bill_williams_vectorized(self, df, window=2):
         """Identifies Fractals (pivots) where a point is the highest/lowest in its local window."""
-        lows = df['Low']
-        highs = df['High']
+        lows = df['low']
+        highs = df['high']
 
         is_support = True
         for j in range(1, window + 1):
@@ -111,11 +115,11 @@ class SupportResistance(Feature):
         pivots = []
         supp_indices = np.where(confirmed_support == True)[0]
         for idx in supp_indices:
-            pivots.append({'price': df['Low'].iloc[idx - window], 'index': idx, 'type': 'support'})
+            pivots.append({'price': df['low'].iloc[idx - window], 'index': idx, 'type': 'support'})
 
         res_indices = np.where(confirmed_resistance == True)[0]
         for idx in res_indices:
-            pivots.append({'price': df['High'].iloc[idx - window], 'index': idx, 'type': 'resistance'})
+            pivots.append({'price': df['high'].iloc[idx - window], 'index': idx, 'type': 'resistance'})
 
         return sorted(pivots, key=lambda x: x['index'])
 
@@ -124,28 +128,28 @@ class SupportResistance(Feature):
         if window % 2 == 0: window += 1
         if len(df) <= window: return []
 
-        smoothed_high = savgol_filter(df['High'], window, polyorder)
-        smoothed_low = savgol_filter(df['Low'], window, polyorder)
+        smoothed_high = savgol_filter(df['high'], window, polyorder)
+        smoothed_low = savgol_filter(df['low'], window, polyorder)
 
         pivots = []
         half = window // 2
         for i in range(half, len(df) - half):
             confirmation_idx = i + half
             if smoothed_low[i] == min(smoothed_low[i-half:i+half+1]):
-                pivots.append({'price': df['Low'].iloc[i], 'index': confirmation_idx, 'type': 'support'})
+                pivots.append({'price': df['low'].iloc[i], 'index': confirmation_idx, 'type': 'support'})
             if smoothed_high[i] == max(smoothed_high[i-half:i+half+1]):
-                pivots.append({'price': df['High'].iloc[i], 'index': confirmation_idx, 'type': 'resistance'})
+                pivots.append({'price': df['high'].iloc[i], 'index': confirmation_idx, 'type': 'resistance'})
         return sorted(pivots, key=lambda x: x['index'])
 
     def get_pivots_zigzag(self, df, deviation_pct=0.05):
         """Standard ZigZag algorithm tracking price swings exceeding a percentage threshold."""
         pivots = []
-        last_pivot_price = df['Close'].iloc[0]
+        last_pivot_price = df['close'].iloc[0]
         last_pivot_type = None
 
         for i in range(1, len(df)):
-            price_high = df['High'].iloc[i]
-            price_low = df['Low'].iloc[i]
+            price_high = df['high'].iloc[i]
+            price_low = df['low'].iloc[i]
 
             diff_high = (price_high - last_pivot_price) / last_pivot_price
             diff_low = (price_low - last_pivot_price) / last_pivot_price
