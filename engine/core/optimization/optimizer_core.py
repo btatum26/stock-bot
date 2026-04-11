@@ -11,6 +11,7 @@ import optuna
 from ..features.features import compute_all_features
 from .local_cache import LocalCache, stage_data_to_shm, load_data_from_shm
 from ..data_broker.data_broker import DataBroker
+from ..logger import logger
 
 def evaluate_parameters_joblib(params: dict, features_config: list, strategy_path: str) -> dict:
     """Isolated trial execution for joblib workers."""
@@ -115,7 +116,7 @@ class OptimizerCore:
         Returns:
             Dictionary mapping hyperparameter names to their optimal values.
         """
-        print(f"      - Starting parameter discovery for {self.dataset_ref}...")
+        logger.info(f"Starting parameter discovery for {self.dataset_ref}...")
 
         df = self.broker.get_data(self.ticker, self.interval, self.start, self.end)
         self.local_cache.load_to_ram(self.dataset_ref, df)
@@ -125,7 +126,7 @@ class OptimizerCore:
         finally:
             self.local_cache.clear_cache(self.dataset_ref)
 
-        print(f"      - Optimal parameters found: {optimal_params}")
+        logger.info(f"Optimal parameters found: {optimal_params}")
         return optimal_params
 
     def run(self):
@@ -143,7 +144,7 @@ class OptimizerCore:
 
         optimal_params = self.discover_params()
 
-        print(f"      - Running Phase B: training with data splits...")
+        logger.info("Running Phase B: training with data splits...")
         trainer = LocalTrainer(self.strategy_path)
         df = self.broker.get_data(self.ticker, self.interval, self.start, self.end)
         results = trainer.run(df, params=optimal_params)
@@ -181,14 +182,14 @@ class OptimizerCore:
             total_p = 0
             
         if total_p == 0:
-            print("      - No valid hyperparameter permutations found. Using default params.")
+            logger.info("No valid hyperparameter permutations found. Using default params.")
             return {k: v[0] if isinstance(v, list) else v for k, v in hparams.items()}
-            
+
         if total_p <= self.PERMUTATION_LIMIT:
-            print(f"      - Circuit Breaker: Tier 1 (Grid Search) selected for {total_p} permutations.")
+            logger.info(f"Circuit Breaker: Tier 1 (Grid Search) selected for {total_p} permutations.")
             return self._run_grid_search(permutations)
         else:
-            print(f"      - Circuit Breaker: Tier 2 (Optuna) selected for {total_p} permutations.")
+            logger.info(f"Circuit Breaker: Tier 2 (Optuna) selected for {total_p} permutations.")
             return self._run_optuna_search(hparams)
 
     def _run_grid_search(self, permutations: list) -> Dict[str, Any]:

@@ -1,6 +1,8 @@
 import os
 import pandas as pd
 
+from ..logger import logger
+
 SHM_PATH = "/dev/shm/active_job.parquet"
 if not os.path.exists("/dev/shm"):
     SHM_PATH = os.path.join(os.getcwd(), "transit", "active_job.parquet")
@@ -12,7 +14,7 @@ def stage_data_to_shm(df: pd.DataFrame, symbol: str, timeframe: str):
     Joblib from copying massive DataFrames to every worker.
     """
     df.to_parquet(SHM_PATH, engine='pyarrow')
-    print(f"      - Data staged to memory at {SHM_PATH}")
+    logger.info(f"Data staged to memory at {SHM_PATH}")
     return SHM_PATH
 
 def load_data_from_shm() -> pd.DataFrame:

@@ -206,7 +206,12 @@ class LocalTrainer:
         ArtifactManager.save_artifacts(self.strategy_dir, artifacts)
 
         # 7. Build and return report
-        return self._build_results(fold_results, folds, df_clean, hyperparams)
+        results = self._build_results(fold_results, folds, df_clean, hyperparams)
+        feature_analysis = artifacts.get("feature_analysis")
+        if feature_analysis:
+            self._print_feature_analysis(feature_analysis)
+            results["feature_analysis"] = feature_analysis
+        return results
 
     # ------------------------------------------------------------------
     # Data splitting
@@ -431,14 +436,131 @@ class LocalTrainer:
         df_valid = df.loc[mask]
         y_valid = y.loc[mask]
 
-        X = df_valid[feature_cols].to_numpy()
+        X = df_valid[feature_cols]
         y_arr = y_valid.to_numpy()
 
         artifacts = model.fit_model(X, y_arr, hyperparams)
         if not isinstance(artifacts, dict):
             raise StrategyError("fit_model must return a dict of artifacts")
         artifacts["feature_cols"] = feature_cols
+        artifacts["feature_analysis"] = self._compute_feature_analysis(
+            X, y_valid, artifacts.get("model"), feature_cols
+        )
         return artifacts
+
+    @staticmethod
+    def _compute_feature_analysis(
+        X: pd.DataFrame,
+        y: Union[pd.Series, np.ndarray],
+        model: Any,
+        feature_cols: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Computes per-feature diagnostics on the pooled training matrix.
+
+        Returns a list of dicts (one per feature) with:
+            - ``name``: feature column name
+            - ``importance``: model.feature_importances_ if available, else None
+            - ``pearson``: Pearson correlation of feature with y
+            - ``spearman``: Spearman rank correlation of feature with y
+            - ``mi``: mutual information with y (classification)
+
+        Captures both linear (pearson), monotonic (spearman), and
+        nonlinear (MI) dependence so the user can see which features
+        actually carry signal the model can exploit.
+        """
+        y_series = pd.Series(y, index=X.index) if not isinstance(y, pd.Series) else y
+        y_arr = y_series.to_numpy()
+
+        importances: Optional[np.ndarray] = None
+        if model is not None and hasattr(model, "feature_importances_"):
+            fi = getattr(model, "feature_importances_")
+            if fi is not None and len(fi) == len(feature_cols):
+                importances = np.asarray(fi, dtype=float)
+
+        mi_scores: Optional[np.ndarray] = None
+        try:
+            from sklearn.feature_selection import mutual_info_classif
+            y_int = y_arr.astype(int)
+            mi_scores = mutual_info_classif(
+                X.to_numpy(), y_int, random_state=42, discrete_features=False
+            )
+        except Exception as e:
+            logger.warning(f"Mutual information failed: {e}")
+
+        rows: List[Dict[str, Any]] = []
+        for i, col in enumerate(feature_cols):
+            x_col = X[col]
+            try:
+                pearson = float(x_col.corr(y_series, method="pearson"))
+            except Exception:
+                pearson = float("nan")
+            try:
+                spearman = float(x_col.corr(y_series, method="spearman"))
+            except Exception:
+                spearman = float("nan")
+
+            rows.append({
+                "name": col,
+                "importance": (
+                    float(importances[i]) if importances is not None else None
+                ),
+                "pearson": pearson,
+                "spearman": spearman,
+                "mi": (
+                    float(mi_scores[i]) if mi_scores is not None else None
+                ),
+            })
+
+        # Sort by importance if present, else by |pearson|.
+        if importances is not None:
+            rows.sort(key=lambda r: -(r["importance"] or 0.0))
+        else:
+            rows.sort(key=lambda r: -abs(r["pearson"]) if not np.isnan(r["pearson"]) else 0.0)
+
+        return rows
+
+    @staticmethod
+    def _print_feature_analysis(analysis: List[Dict[str, Any]]) -> None:
+        """Prints the feature importance / correlation table."""
+        if not analysis:
+            return
+
+        has_importance = any(r["importance"] is not None for r in analysis)
+        has_mi = any(r["mi"] is not None for r in analysis)
+
+        print("\n" + "=" * 78)
+        print(" " * 25 + "FEATURE ANALYSIS (pooled train)")
+        print("=" * 78)
+        header = f"  {'Feature':<36}"
+        if has_importance:
+            header += f" {'Importance':>11}"
+        header += f" {'Pearson':>9} {'Spearman':>10}"
+        if has_mi:
+            header += f" {'MI':>8}"
+        print(header)
+        print("  " + "-" * 76)
+
+        for r in analysis:
+            line = f"  {r['name'][:36]:<36}"
+            if has_importance:
+                imp = r["importance"]
+                line += f" {imp:>11.4f}" if imp is not None else f" {'N/A':>11}"
+            p = r["pearson"]
+            s = r["spearman"]
+            line += (
+                f" {p:>9.3f}" if not (isinstance(p, float) and np.isnan(p))
+                else f" {'N/A':>9}"
+            )
+            line += (
+                f" {s:>10.3f}" if not (isinstance(s, float) and np.isnan(s))
+                else f" {'N/A':>10}"
+            )
+            if has_mi:
+                mi = r["mi"]
+                line += f" {mi:>8.4f}" if mi is not None else f" {'N/A':>8}"
+            print(line)
+
+        print("=" * 78 + "\n")
 
     # ------------------------------------------------------------------
     # Results aggregation
@@ -707,9 +829,14 @@ class LocalTrainer:
         ArtifactManager.save_artifacts(self.strategy_dir, artifacts)
 
         # 7. Build report
-        return self._build_multi_results(
+        results = self._build_multi_results(
             fold_results, folds, prepared, hyperparams
         )
+        feature_analysis = artifacts.get("feature_analysis")
+        if feature_analysis:
+            self._print_feature_analysis(feature_analysis)
+            results["feature_analysis"] = feature_analysis
+        return results
 
     def _split_walk_forward_by_date(
         self,
@@ -788,7 +915,7 @@ class LocalTrainer:
         model = model_class()
         context = context_class() if context_class else None
 
-        train_X_parts: List[np.ndarray] = []
+        train_X_parts: List[pd.DataFrame] = []
         train_y_parts: List[np.ndarray] = []
         train_slices: Dict[str, pd.DataFrame] = {}
         val_slices: Dict[str, pd.DataFrame] = {}
@@ -815,7 +942,7 @@ class LocalTrainer:
             if df_train_valid.empty:
                 continue
 
-            train_X_parts.append(df_train_valid[feature_cols].to_numpy())
+            train_X_parts.append(df_train_valid[feature_cols])
             train_y_parts.append(y_valid.to_numpy())
             train_slices[ticker] = df_train_t
             val_slices[ticker] = df_val_t
@@ -825,12 +952,16 @@ class LocalTrainer:
                 f"Fold produced no training data [{train_start} -> {train_end}]"
             )
 
-        X_train = np.concatenate(train_X_parts, axis=0)
+        X_train_df = pd.concat(train_X_parts, axis=0)
         y_train = np.concatenate(train_y_parts, axis=0)
 
-        # Fit scaler on pooled X, then transform
+        # Fit scaler on pooled X, keep DataFrame shape so feature names flow through to fit_model.
         scaler = MinMaxScaler(feature_range=(-1.0, 1.0))  # type: ignore[arg-type]
-        X_train_scaled = scaler.fit_transform(X_train)
+        X_train_scaled = pd.DataFrame(
+            scaler.fit_transform(X_train_df),
+            index=X_train_df.index,
+            columns=X_train_df.columns,
+        )
 
         artifacts = model.fit_model(X_train_scaled, y_train, hyperparams)
         if not isinstance(artifacts, dict):
@@ -908,7 +1039,7 @@ class LocalTrainer:
         model = model_class()
         context = context_class() if context_class else None
 
-        X_parts: List[np.ndarray] = []
+        X_parts: List[pd.DataFrame] = []
         y_parts: List[np.ndarray] = []
         for p in prepared.values():
             df = p["df_clean"]
@@ -921,23 +1052,30 @@ class LocalTrainer:
             df_valid = df.loc[valid]
             if df_valid.empty:
                 continue
-            X_parts.append(df_valid[feature_cols].to_numpy())
+            X_parts.append(df_valid[feature_cols])
             y_parts.append(y.loc[valid].to_numpy())
 
         if not X_parts:
             raise StrategyError("Final training produced no data across all tickers")
 
-        X = np.concatenate(X_parts, axis=0)
+        X_df = pd.concat(X_parts, axis=0)
         y_full = np.concatenate(y_parts, axis=0)
 
         scaler = MinMaxScaler(feature_range=(-1.0, 1.0))  # type: ignore[arg-type]
-        X_scaled = scaler.fit_transform(X)
+        X_scaled = pd.DataFrame(
+            scaler.fit_transform(X_df),
+            index=X_df.index,
+            columns=X_df.columns,
+        )
 
         artifacts = model.fit_model(X_scaled, y_full, hyperparams)
         if not isinstance(artifacts, dict):
             raise StrategyError("fit_model must return a dict of artifacts")
         artifacts["feature_cols"] = feature_cols
         artifacts["system_scaler"] = scaler
+        artifacts["feature_analysis"] = self._compute_feature_analysis(
+            X_scaled, y_full, artifacts.get("model"), feature_cols
+        )
 
         return {"artifacts": artifacts}
 

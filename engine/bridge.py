@@ -9,6 +9,7 @@ progress and cancellation back to a QThread without importing Qt.
 
 import os
 import json
+import logging
 import zipfile
 from datetime import datetime, timedelta
 from typing import List
@@ -26,6 +27,24 @@ from engine.core.metrics import Tearsheet
 from engine.core.exceptions import StrategyError, ValidationError
 
 _REQUIRED_MANIFEST_KEYS = {"features", "hyperparameters", "parameter_bounds"}
+
+
+class _CallbackLogHandler(logging.Handler):
+    """Forwards engine log records to a GUI callback.
+
+    Installed on the 'model-engine' logger while a job is running so the
+    training panel's text box mirrors what's printed to the console.
+    """
+
+    def __init__(self, callback):
+        super().__init__()
+        self._callback = callback
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._callback(self.format(record))
+        except Exception:
+            pass
 
 # Bars needed for indicator warm-up, keyed by interval
 _WARMUP_WINDOW: dict = {
@@ -340,8 +359,19 @@ class ModelEngine:
             ),
         )
 
-        controller = ApplicationController(strategies_dir=self.workspace_dir)
-        result = controller.execute_job(payload)
+        # Mirror 'model-engine' logger records into the GUI log panel for
+        # the duration of this training run. Child loggers propagate up,
+        # so this catches trainer, controller, optimizer, etc.
+        engine_logger = logging.getLogger("model-engine")
+        gui_handler = _CallbackLogHandler(callbacks["on_log"])
+        gui_handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+        engine_logger.addHandler(gui_handler)
+
+        try:
+            controller = ApplicationController(strategies_dir=self.workspace_dir)
+            result = controller.execute_job(payload)
+        finally:
+            engine_logger.removeHandler(gui_handler)
 
         callbacks["on_progress"](100, "Training complete.")
         return result if isinstance(result, dict) else {"result": str(result)}

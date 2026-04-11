@@ -82,15 +82,20 @@ class Tearsheet:
         total_return = (equity_curve.iloc[-1] - 1) * 100
         total_trades_continuous = int((trades_mask > 0).sum())
 
-        # Use median bar duration × bar count so CPCV non-contiguous training
+        # Use median bar duration x bar count so CPCV non-contiguous training
         # folds don't inflate `days` by spanning the full calendar range of
         # the dataset (which would include gaps belonging to validation groups).
+        # Use pandas Timedelta arithmetic instead of astype(int64), since
+        # pandas 2.x DatetimeIndex can have non-ns resolution and int64 casts
+        # would return seconds/micros and collapse `days` to zero.
         if len(df.index) > 1:
-            diffs_sec = np.diff(df.index.astype(np.int64)) / 1e9  # ns → seconds
-            median_bar_sec = float(np.median(diffs_sec))
-            days = int(median_bar_sec * len(equity_curve) / 86400)
+            diffs_sec = (
+                df.index.to_series().diff().dropna().dt.total_seconds()
+            )
+            median_bar_sec = float(diffs_sec.median()) if not diffs_sec.empty else 0.0
+            days = max(int(median_bar_sec * len(equity_curve) / 86400), 1)
         else:
-            days = 0
+            days = 1
         end_equity = float(equity_curve.iloc[-1])
         if end_equity > 0 and days > 0:
             log_eq = np.log(end_equity) if np.isfinite(end_equity) else np.inf

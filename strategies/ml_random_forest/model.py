@@ -1,12 +1,13 @@
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.utils.class_weight import compute_sample_weight
 from context import Context
 from engine.core.controller import SignalModel
 
 
 class RandomForestModel(SignalModel):
-    """Long-only random forest regime classifier.
+    """Long-only XGBoost regime classifier.
 
     Predicts one of three regimes over a lookforward window:
         0 = down  (forward return < down_threshold)
@@ -52,23 +53,40 @@ class RandomForestModel(SignalModel):
         return y
 
     def fit_model(self, X, y, params: dict) -> dict:
-        """Fits a random forest classifier on the pooled (X, y) matrix."""
-        n_estimators = int(params.get("n_estimators", 200))
-        max_depth = params.get("max_depth", 3)
-        if max_depth is not None:
-            max_depth = int(max_depth)
-        min_samples_leaf = int(params.get("min_samples_leaf", 50))
+        """Fits an XGBoost classifier on the pooled (X, y) matrix."""
+        n_estimators = int(params.get("n_estimators", 300))
+        max_depth = int(params.get("max_depth", 4))
+        learning_rate = float(params.get("learning_rate", 0.05))
+        min_child_weight = float(params.get("min_child_weight", 20))
+        subsample = float(params.get("subsample", 0.8))
+        colsample_bytree = float(params.get("colsample_bytree", 0.8))
+        reg_lambda = float(params.get("reg_lambda", 1.0))
+        reg_alpha = float(params.get("reg_alpha", 0.0))
+        gamma = float(params.get("gamma", 0.0))
 
-        clf = RandomForestClassifier(
+        y_int = y.astype(int)
+        # Chop tends to dominate the sample; balance via per-row sample weights
+        # so up/down aren't drowned out. XGBoost has no native class_weight arg.
+        sample_weight = compute_sample_weight(class_weight="balanced", y=y_int)
+
+        clf = XGBClassifier(
             n_estimators=n_estimators,
             max_depth=max_depth,
-            min_samples_leaf=min_samples_leaf,
+            learning_rate=learning_rate,
+            min_child_weight=min_child_weight,
+            subsample=subsample,
+            colsample_bytree=colsample_bytree,
+            reg_lambda=reg_lambda,
+            reg_alpha=reg_alpha,
+            gamma=gamma,
+            objective="multi:softprob",
+            num_class=3,
+            tree_method="hist",
             random_state=42,
             n_jobs=-1,
-            # Chop tends to dominate the sample; balance so up/down aren't ignored.
-            class_weight="balanced",
+            eval_metric="mlogloss",
         )
-        clf.fit(X, y.astype(int))
+        clf.fit(X, y_int, sample_weight=sample_weight)
 
         return {"model": clf}
 
