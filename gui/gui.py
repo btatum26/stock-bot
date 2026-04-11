@@ -7,8 +7,9 @@ import pandas as pd
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QGroupBox, QLabel, QMainWindow,
-    QPushButton, QScrollArea, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFrame, QGroupBox, QInputDialog, QLabel,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSplitter,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from engine import ModelEngine
@@ -227,6 +228,12 @@ class ChartWindow(QMainWindow):
         self.chart_strategy_combo.currentIndexChanged.connect(self._load_strategy_features)
         strat_layout.addWidget(self.chart_strategy_combo)
 
+        self.btn_new_strategy = QPushButton("New Strategy")
+        self.btn_new_strategy.setFixedHeight(26)
+        self.btn_new_strategy.setToolTip("Create a new strategy scaffold")
+        self.btn_new_strategy.clicked.connect(self._create_new_strategy)
+        strat_layout.addWidget(self.btn_new_strategy)
+
         self.btn_gen_signals = QPushButton("Generate Signals")
         self.btn_gen_signals.setFixedHeight(26)
         self.btn_gen_signals.setToolTip("Run strategy signals on current chart data")
@@ -259,6 +266,22 @@ class ChartWindow(QMainWindow):
             self.training_panel.refresh_strategies()
         elif index == 0:
             self._refresh_strategy_combo()
+
+    def _create_new_strategy(self):
+        """Prompt for a name and scaffold a new strategy via ModelEngine."""
+        name, ok = QInputDialog.getText(self, "New Strategy", "Strategy name:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        try:
+            self.engine.create_strategy(name)
+            self._refresh_strategy_combo()
+            idx = self.chart_strategy_combo.findText(name)
+            if idx >= 0:
+                self.chart_strategy_combo.setCurrentIndex(idx)
+            self.lbl_strat_status.setText(f"Created '{name}'.")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", str(e))
 
     def _refresh_strategy_combo(self):
         """Repopulate the chart-tab strategy combo from the workspace directory."""

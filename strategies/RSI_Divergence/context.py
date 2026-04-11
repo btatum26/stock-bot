@@ -25,11 +25,11 @@ class FeaturesContext:
 @dataclass(frozen=True)
 class ParamsContext:
     """Typed strategy hyperparameters."""
-    fractal_n: int = 4
-    min_divergence_rsi: float = 3.0
-    max_hold_bars: int = 20
-    rsi_bull_threshold: float = 70.0
-    rsi_bear_threshold: float = 70.0
+    low_vol_threshold: float = 0.25
+    high_vol_threshold: float = 0.75
+    atr_lookback: int = 252
+    atr_roc_max: float = 0.1
+    stop_loss: float = 0.07
 
 
 @dataclass(frozen=True)

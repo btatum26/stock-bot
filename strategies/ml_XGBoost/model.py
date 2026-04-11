@@ -39,9 +39,9 @@ class XGBoostModel(SignalModel):
         Returns a Series aligned to ``df.index`` with NaN for the last
         ``lookforward`` bars (no forward return available).
         """
-        lookforward = int(params.get("lookforward", 5))
-        up_threshold = float(params.get("up_threshold", 0.01))
-        down_threshold = float(params.get("down_threshold", -0.01))
+        lookforward = int(params.get("lookforward", 15))
+        up_threshold = float(params.get("up_threshold", 0.1))
+        down_threshold = float(params.get("down_threshold", 0))
 
         future_close = df["close"].shift(-lookforward)
         forward_return = (future_close - df["close"]) / df["close"]
@@ -124,7 +124,7 @@ class XGBoostModel(SignalModel):
         # With 3 classes the max probability rarely exceeds ~0.5, so
         # thresholds are lower than the binary model's defaults.
         entry_threshold = float(params.get("entry_threshold", 0.45))
-        exit_threshold = float(params.get("exit_threshold", 0.30))
+        exit_threshold = float(params.get("exit_threshold", 0.20))
 
         signals = np.zeros(len(df))
         position = 0.0
