@@ -227,8 +227,10 @@ class FeatureManager(QObject):
                 key = ("line", res.name)
                 existing = old_overlays.get(key)
                 if existing is not None:
-                    # Reuse — just push new data through setData()
+                    # Reuse — push new data and re-apply color in case it changed
                     existing.data_dict = {res.name: res.data}
+                    if existing.color != res.color:
+                        existing.set_color(res.color)
                     existing.update(df)
                     new_overlay_list.append(existing)
                     reused.add(key)
@@ -241,7 +243,7 @@ class FeatureManager(QObject):
             elif isinstance(res, LevelOutput):
                 key = ("level", res.name)
                 existing = old_overlays.get(key)
-                if existing is not None and existing.price == res.min_price:
+                if existing is not None and existing.price == res.min_price and existing.color == res.color:
                     new_overlay_list.append(existing)
                     reused.add(key)
                 else:

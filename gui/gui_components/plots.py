@@ -111,6 +111,12 @@ class LineOverlay(BaseOverlay):
         self.line_items = {}  # {name: PlotDataItem}
         self._y_arrays = {}  # {name: np.ndarray} — cached for get_y_range
 
+    def set_color(self, color):
+        self.color = color
+        self._pen = pg.mkPen(color, width=self.width)
+        for item in self.line_items.values():
+            item.setPen(self._pen)
+
     def update(self, df):
         for name, data in self.data_dict.items():
             arr = np.asarray(data, dtype=np.float64)
