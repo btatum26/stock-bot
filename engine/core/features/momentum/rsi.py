@@ -31,7 +31,7 @@ class RSI(Feature):
             "period": 14, #Lookback period for RSI calculation.
             "overbought": 70.0, # Overbought threshold level.
             "oversold": 30.0, # Oversold threshold level.
-            "normalize": "none" # Normalization method to apply to the RSI values.
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"] # Normalization method to apply to the RSI values.
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:

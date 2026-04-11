@@ -19,6 +19,7 @@ from .gui_components.controls import ControlBar
 from .gui_components.feature_panel import FeaturePanel
 from .gui_components.plots import CandleOverlay, UnifiedPlot, VolumeOverlay
 from .gui_components.styling import setup_app_style
+from .gui_components.training_panel import TrainingPanel
 
 from .chart.data_manager import ChartDataManager
 from .chart.feature_manager import FeatureManager
@@ -124,6 +125,9 @@ class ChartWindow(QMainWindow):
 
         self.backtest_panel = BacktestPanel(self.engine, self)
         self.top_tabs.addTab(self.backtest_panel, "Backtest")
+
+        self.training_panel = TrainingPanel(self.engine, self)
+        self.top_tabs.addTab(self.training_panel, "Training")
 
         self.showMaximized()
 
@@ -251,6 +255,8 @@ class ChartWindow(QMainWindow):
     def _on_tab_changed(self, index: int):
         if index == 1:
             self.backtest_panel.refresh_strategies()
+        elif index == 2:
+            self.training_panel.refresh_strategies()
         elif index == 0:
             self._refresh_strategy_combo()
 
@@ -308,9 +314,12 @@ class ChartWindow(QMainWindow):
                 skipped.append(feat_id)
                 continue
             initial_values = {k: str(v) for k, v in params.items()}
-            initial_values.update(color_prefs.get(display_name, {}))
-            self._feature_manager.add(display_name, initial_values=initial_values)
-            loaded.append(display_name)
+            # Predict the instance key so we can look up the right color prefs
+            instance_key = self._feature_manager._make_instance_key(display_name)
+            saved_colors = color_prefs.get(instance_key, color_prefs.get(display_name, {}))
+            initial_values.update(saved_colors)
+            instance_key = self._feature_manager.add(display_name, initial_values=initial_values)
+            loaded.append(instance_key)
         self._suppress_sync = False
 
         parts = []
@@ -565,11 +574,12 @@ class ChartWindow(QMainWindow):
     # -----------------------------------------------------------------------
 
     def closeEvent(self, event):
-        if (hasattr(self.backtest_panel, "_worker")
-                and self.backtest_panel._worker
-                and self.backtest_panel._worker.isRunning()):
-            self.backtest_panel._worker.cancel()
-            self.backtest_panel._worker.wait(2000)
+        for panel in (self.backtest_panel, self.training_panel):
+            if (hasattr(panel, "_worker")
+                    and panel._worker
+                    and panel._worker.isRunning()):
+                panel._worker.cancel()
+                panel._worker.wait(2000)
         event.accept()
 
 

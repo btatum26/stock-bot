@@ -77,10 +77,6 @@ class FractalFeatures(Feature):
     @property
     def output_schema(self) -> List[OutputSchema]:
         return [
-            # --- Fractal markers (on price / source pane) ---
-            OutputSchema(name="Is_Fractal_High",    output_type=OutputType.MARKER, pane=Pane.OVERLAY),
-            OutputSchema(name="Is_Fractal_Low",     output_type=OutputType.MARKER, pane=Pane.OVERLAY),
-
             # --- Values at the swing point (sparse) ---
             OutputSchema(name="Fractal_High_Price", output_type=OutputType.LINE,   pane=Pane.OVERLAY),
             OutputSchema(name="Fractal_Low_Price",  output_type=OutputType.LINE,   pane=Pane.OVERLAY),

@@ -28,7 +28,7 @@ class AverageTrueRange(Feature):
     def parameters(self) -> Dict[str, Any]:
         return {
             "period": 14,
-            "normalize": "none"
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
@@ -55,5 +55,5 @@ class AverageTrueRange(Feature):
         # Apply systematic normalization
         final_data = self.normalize(df, atr, norm_method)
 
-        col_name = self.generate_column_name("ATR", params)
+        col_name = self.generate_column_name("AverageTrueRange", params)
         return FeatureResult(data={col_name: final_data})

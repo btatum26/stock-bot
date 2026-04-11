@@ -6,8 +6,6 @@ from dataclasses import dataclass, field
 class FeaturesContext:
     """Typed mapping from strategy features to DataFrame column names."""
     RSI_14: str = 'RSI_14'
-    IS_FRACTAL_HIGH: str = 'Fractals_4_IS_FRACTAL_HIGH'
-    IS_FRACTAL_LOW: str = 'Fractals_4_IS_FRACTAL_LOW'
     FRACTAL_HIGH_PRICE: str = 'Fractals_4_FRACTAL_HIGH_PRICE'
     FRACTAL_LOW_PRICE: str = 'Fractals_4_FRACTAL_LOW_PRICE'
     LAST_FRACTAL_HIGH: str = 'Fractals_4_LAST_FRACTAL_HIGH'
@@ -20,6 +18,8 @@ class FeaturesContext:
     BARS_SINCE_LAST_LOW: str = 'Fractals_4_BARS_SINCE_LAST_LOW'
     LAST_SUPPORT_LEVEL: str = 'SupportResistance_0.3_Bill Williams_3.0_0.015_35_LAST_SUPPORT_LEVEL'
     LAST_RESISTANCE_LEVEL: str = 'SupportResistance_0.3_Bill Williams_3.0_0.015_35_LAST_RESISTANCE_LEVEL'
+    NEAREST_SUPPORT_LEVEL: str = 'SupportResistance_0.3_Bill Williams_3.0_0.015_35_NEAREST_SUPPORT_LEVEL'
+    NEAREST_RESISTANCE_LEVEL: str = 'SupportResistance_0.3_Bill Williams_3.0_0.015_35_NEAREST_RESISTANCE_LEVEL'
 
 
 @dataclass(frozen=True)

@@ -20,7 +20,7 @@ class OBV(Feature):
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
-            "normalize": "none"
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
     @property

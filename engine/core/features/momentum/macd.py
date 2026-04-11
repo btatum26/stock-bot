@@ -37,7 +37,7 @@ class MACD(Feature):
             "fast_period": 12,
             "slow_period": 26,
             "signal_period": 9,
-            "normalize": "none"
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:

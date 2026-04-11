@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 from typing import Dict, Any, Tuple, List
@@ -113,3 +114,38 @@ class MLBridge:
             logger.debug("No system_scaler found in artifacts. Passing unscaled data.")
 
         return df_clean
+
+    @staticmethod
+    def apply_price_normalization(df: pd.DataFrame, method: str) -> pd.DataFrame:
+        """Normalizes raw OHLCV price columns before model training or inference.
+
+        Applied after feature computation and warmup purge so computed features
+        (which depend on raw prices) are unaffected.
+
+        Args:
+            df: DataFrame containing OHLCV columns (lowercase names).
+            method: Normalization method — 'log_returns' or 'none'.
+
+        Returns:
+            DataFrame with normalized price columns. For 'log_returns', the first
+            row is dropped because the shift operation produces a NaN there.
+        """
+        if not method or method == "none":
+            return df
+
+        df = df.copy()
+
+        if method == "log_returns":
+            for col in ("open", "high", "low", "close"):
+                if col in df.columns:
+                    df[col] = np.log(df[col] / df[col].shift(1))
+            if "volume" in df.columns:
+                # Volume is already mean-reverting; use log-level rather than log-diff
+                df["volume"] = np.log(df["volume"].replace(0, np.nan)).fillna(0)
+            df = df.iloc[1:]  # drop NaN row introduced by shift on price columns
+        else:
+            logger.warning(
+                f"Unknown price normalization method '{method}'. Skipping."
+            )
+
+        return df

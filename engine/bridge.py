@@ -147,6 +147,17 @@ class ModelEngine:
             bounds=config.get("parameter_bounds", {}),
         )
 
+    def save_training_config(self, strategy_name: str, training_config: dict) -> None:
+        """Update only the 'training' section of a strategy's manifest.
+
+        Does not touch features, hyperparameters, or regenerate context.py.
+        """
+        manifest = self._load_manifest(strategy_name)
+        manifest["training"] = training_config
+        manifest_path = os.path.join(self._strategy_dir(strategy_name), "manifest.json")
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=4)
+
     def export_strategy(self, strategy_name: str, export_path: str) -> str:
         strategy_dir = self._strategy_dir(strategy_name)
         return Bundler.export(strategy_dir, export_path)

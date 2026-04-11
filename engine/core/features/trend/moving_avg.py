@@ -27,7 +27,7 @@ class MovingAverage(Feature):
         return {
             "period": 50,
             "type": "SMA",
-            "normalize": "none",
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"],
         }
 
     @property

@@ -9,7 +9,6 @@ from joblib import Parallel, delayed
 import optuna
 
 from ..features.features import compute_all_features
-from ..backtester import LocalBacktester
 from .local_cache import LocalCache, stage_data_to_shm, load_data_from_shm
 from ..data_broker.data_broker import DataBroker
 
@@ -28,7 +27,7 @@ def evaluate_parameters_joblib(params: dict, features_config: list, strategy_pat
     
     try:
         # Step 2: Compute features dynamically
-        df_features, _, _ = compute_all_features(df_raw, features_config)
+        df_features, _ = compute_all_features(df_raw, features_config)
         
         # Step 3: Load model.py and context.py dynamically
         model_path = os.path.join(strategy_path, "model.py")
@@ -69,13 +68,15 @@ def evaluate_parameters_joblib(params: dict, features_config: list, strategy_pat
         artifacts = model_instance.train(df_features, context_class, params)
         signals = model_instance.generate_signals(df_features, context_class, params, artifacts)
         
-        returns = df_raw["close"].pct_change().fillna(0)
-        strategy_returns = signals.shift(1).fillna(0) * returns
-        
+        # T+1 execution model: signal at T, enter at T+1 open, exit at T+2 open.
+        # Must match Tearsheet.calculate_metrics() to avoid lookahead bias.
+        returns = df_raw["open"].pct_change().shift(-2)
+        strategy_returns = (signals * returns).fillna(0)
+
         sharpe = 0.0
         if strategy_returns.std() != 0:
             sharpe = (strategy_returns.mean() / strategy_returns.std()) * (252 ** 0.5)
-            
+
         return {"sharpe": float(sharpe), "params": params}
         
     except Exception as e:
@@ -105,27 +106,49 @@ class OptimizerCore:
         self.local_cache = LocalCache()
         self.broker = DataBroker()
 
-    def run(self):
-        print(f"      - Starting Optimizer run for {self.dataset_ref}...")
-        
+    def discover_params(self) -> Dict[str, Any]:
+        """Runs Phase A only: hyperparameter search via grid or Optuna.
+
+        Stages data to shared memory, executes the search, cleans up,
+        and returns the best parameter set found.
+
+        Returns:
+            Dictionary mapping hyperparameter names to their optimal values.
+        """
+        print(f"      - Starting parameter discovery for {self.dataset_ref}...")
+
         df = self.broker.get_data(self.ticker, self.interval, self.start, self.end)
-        
-        # Stage to dev/shm
         self.local_cache.load_to_ram(self.dataset_ref, df)
-        
-        # Phase A: Discovery routing based on permutations
-        optimal_params = self._phase_a_discovery()
-        
-        self.local_cache.clear_cache(self.dataset_ref)
-        
+
+        try:
+            optimal_params = self._phase_a_discovery()
+        finally:
+            self.local_cache.clear_cache(self.dataset_ref)
+
         print(f"      - Optimal parameters found: {optimal_params}")
-        print(f"      - Running Phase B reality check...")
-        final_metrics = self._phase_b_reality_check(optimal_params)
-        
-        return {
-            "optimal_params": optimal_params,
-            "metrics": final_metrics
-        }
+        return optimal_params
+
+    def run(self):
+        """Runs the full optimization + training pipeline.
+
+        Phase A discovers optimal hyperparameters. Phase B trains the
+        strategy with proper data splitting via ``LocalTrainer`` and
+        persists artifacts.
+
+        Returns:
+            Dictionary containing ``optimal_params`` and training results
+            (``train_metrics``, ``val_metrics``, ``split_info``).
+        """
+        from ..trainer import LocalTrainer
+
+        optimal_params = self.discover_params()
+
+        print(f"      - Running Phase B: training with data splits...")
+        trainer = LocalTrainer(self.strategy_path)
+        df = self.broker.get_data(self.ticker, self.interval, self.start, self.end)
+        results = trainer.run(df, params=optimal_params)
+        results["optimal_params"] = optimal_params
+        return results
 
     def _phase_a_discovery(self) -> Dict[str, Any]:
         """Calculates permutations and routes to Grid Search or Optuna."""
@@ -211,8 +234,3 @@ class OptimizerCore:
         
         return study.best_params
 
-    def _phase_b_reality_check(self, optimal_params: Dict[str, Any]) -> Dict[str, Any]:
-        backtester = LocalBacktester(self.strategy_path)
-        df = self.broker.get_data(self.ticker, self.interval, self.start, self.end)
-        signals = backtester.run(df, params=optimal_params)
-        return {"sharpe": 1.5, "status": "verified", "params": optimal_params}

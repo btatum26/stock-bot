@@ -21,7 +21,7 @@ class ADX(Feature):
     def parameters(self) -> Dict[str, Any]:
         return {
             "period": 14,
-            "normalize": "none"
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
     @property

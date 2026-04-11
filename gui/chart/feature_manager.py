@@ -70,11 +70,12 @@ class FeatureManager(QObject):
     # Public API — feature lifecycle
     # -----------------------------------------------------------------------
 
-    def add(self, feat_name: str, initial_values=None) -> None:
-        """Add a feature to the chart. Renders immediately if df is available."""
-        if feat_name in self.active_features:
-            return
+    def add(self, feat_name: str, initial_values=None) -> str:
+        """Add a feature to the chart. Renders immediately if df is available.
 
+        Returns the instance key used (e.g. "RSI", "RSI (2)").
+        """
+        instance_key = self._make_instance_key(feat_name)
         feature     = self._available[feat_name]
         output_names = getattr(feature, "output_names", None)
         source_keys  = getattr(feature, "source_param_keys", [])
@@ -84,8 +85,8 @@ class FeatureManager(QObject):
         )
 
         input_widgets, visibility_widgets, group_widget = self._feature_panel.create_feature_widget(
-            feat_name, feature.parameters,
-            lambda fn=feat_name: self._on_param_changed(fn),
+            instance_key, feature.parameters,
+            lambda fn=instance_key: self._on_param_changed(fn),
             self.remove,
             initial_values=initial_values,
             output_names=output_names if output_names and len(output_names) > 1 else None,
@@ -118,7 +119,7 @@ class FeatureManager(QObject):
                     xMin=-0.5, xMax=total + 0.5, maxXRange=MAX_CHART_BARS)
             new_pw.addItem(new_plot)
             plot_target = new_plot
-            self.sub_plots[feat_name] = new_plot
+            self.sub_plots[instance_key] = new_plot
 
             v_line = pg.InfiniteLine(
                 angle=90, movable=False,
@@ -127,7 +128,7 @@ class FeatureManager(QObject):
             self._v_lines.append(v_line)
             reorganize = True
 
-        self.active_features[feat_name] = {
+        self.active_features[instance_key] = {
             "instance":   feature,
             "inputs":     input_widgets,
             "visibility": visibility_widgets,
@@ -139,12 +140,22 @@ class FeatureManager(QObject):
         }
 
         if self._df is not None:
-            self.update(feat_name)
+            self.update(instance_key)
 
         if reorganize:
             self._reorganize_subplots()
 
         self.refresh_source_selectors()
+        return instance_key
+
+    def _make_instance_key(self, feat_name: str) -> str:
+        """Generate a unique key like 'RSI', 'RSI (2)', 'RSI (3)', etc."""
+        if feat_name not in self.active_features:
+            return feat_name
+        n = 2
+        while f"{feat_name} ({n})" in self.active_features:
+            n += 1
+        return f"{feat_name} ({n})"
 
     def remove(self, feat_name: str, widget, reorganize: bool = True,
                sync: bool = True) -> None:

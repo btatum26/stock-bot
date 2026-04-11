@@ -8,6 +8,8 @@ from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 
 from .features.features import compute_all_features
+from .ml_bridge.orchestrator import MLBridge
+from .ml_bridge.artifact_manager import ArtifactManager
 from .logger import logger
 from .exceptions import StrategyError
 
@@ -65,6 +67,10 @@ class Tearsheet:
         # Reindex to signals.index so all downstream operations share the same index
         # (df may be the full raw frame while signals come from the warmup-purged slice).
         returns = df['open'].pct_change().shift(-2).reindex(signals.index)
+        # Clip raw bar returns to [-0.5, 0.5] to prevent extreme gaps (splits,
+        # halts, earnings shocks) from driving strategy_returns below -1.0,
+        # which would flip the equity curve negative and break CAGR math.
+        returns = returns.clip(lower=-0.5, upper=0.5)
         strategy_returns = signals * returns
 
         # Friction fires on every change in signal magnitude (continuous model).
@@ -76,8 +82,25 @@ class Tearsheet:
         total_return = (equity_curve.iloc[-1] - 1) * 100
         total_trades_continuous = int((trades_mask > 0).sum())
 
-        days = (df.index.max() - df.index.min()).days
-        cagr = ((equity_curve.iloc[-1]) ** (365.25 / days) - 1) * 100 if days > 0 else 0.0
+        # Use median bar duration × bar count so CPCV non-contiguous training
+        # folds don't inflate `days` by spanning the full calendar range of
+        # the dataset (which would include gaps belonging to validation groups).
+        if len(df.index) > 1:
+            diffs_sec = np.diff(df.index.astype(np.int64)) / 1e9  # ns → seconds
+            median_bar_sec = float(np.median(diffs_sec))
+            days = int(median_bar_sec * len(equity_curve) / 86400)
+        else:
+            days = 0
+        end_equity = float(equity_curve.iloc[-1])
+        if end_equity > 0 and days > 0:
+            log_eq = np.log(end_equity) if np.isfinite(end_equity) else np.inf
+            exponent = log_eq * (365.25 / days)
+            # Cap the exponent to prevent absurd CAGR values from short
+            # CPCV validation windows where small gains annualize to millions.
+            exponent = max(min(exponent, 10.0), -10.0)
+            cagr = (np.exp(exponent) - 1) * 100 if np.isfinite(exponent) else float('inf')
+        else:
+            cagr = -100.0
 
         trade_returns = strategy_returns[trades_mask > 0]
         win_rate = (trade_returns > 0).mean() * 100 if not trade_returns.empty else 0.0
@@ -367,20 +390,39 @@ class LocalBacktester:
                 if nan_count > 0:
                     logger.warning(f"Feature '{col}' has {nan_count} unexpected NaN values after l_max purge.")
 
-    def run(self, raw_data: pd.DataFrame, params: Optional[Dict[str, Any]] = None) -> pd.Series:
-        """
-        Executes a single vectorized backtest pass.
+    def run(
+        self,
+        raw_data: pd.DataFrame,
+        params: Optional[Dict[str, Any]] = None,
+        artifacts: Optional[Dict[str, Any]] = None,
+    ) -> pd.Series:
+        """Executes a single vectorized backtest pass.
+
+        When ``artifacts`` are provided (e.g. from a prior TRAIN run), the
+        backtester skips ``model.train()`` and applies the saved scaler via
+        ``MLBridge`` before calling ``generate_signals()`` directly. This is
+        the intended path for SIGNAL_ONLY mode with trained ML strategies.
+
+        When ``artifacts`` is ``None``, the backtester trains inline (calling
+        ``model.train()`` on the same data used for signal generation). This
+        is the standard BACKTEST path.
 
         Args:
-            raw_data (pd.DataFrame): The raw OHLCV market data.
-            params (Optional[Dict[str, Any]]): Strategy hyperparameters. Defaults to
-                the values in `manifest.json`.
+            raw_data: The raw OHLCV market data with a ``DatetimeIndex``.
+            params: Strategy hyperparameters. Defaults to the values in
+                ``manifest.json``.
+            artifacts: Pre-trained artifacts dictionary. When provided,
+                ``model.train()`` is skipped and the saved scaler (if any)
+                is applied via ``MLBridge``. When ``None``, loads persisted
+                artifacts from disk for ML strategies, falling back to
+                inline training if none exist.
 
         Returns:
-            pd.Series: The generated conviction signals, bounded between [-1.0, 1.0].
+            The generated conviction signals, bounded between [-1.0, 1.0].
 
         Raises:
-            StrategyError: If execution fails at any point during feature computation or modeling.
+            StrategyError: If execution fails at any point during feature
+                computation or modeling.
         """
         try:
             features_config = self.manifest.get('features', [])
@@ -391,6 +433,11 @@ class LocalBacktester:
             # Universal Warmup Purge (Protects both ML and Rule-Based from NaN lookbacks)
             df_clean = df_full.iloc[l_max:].copy()
 
+            # Match any price normalization applied during training
+            price_norm = self.manifest.get("training", {}).get("price_normalization", "none")
+            if price_norm != "none":
+                df_clean = MLBridge.apply_price_normalization(df_clean, price_norm)
+
             feature_ids = [f['id'] for f in features_config]
             self._audit_nans(df_clean, feature_ids)
 
@@ -400,24 +447,70 @@ class LocalBacktester:
             context = context_class() if context_class else None
             hyperparams = params if params is not None else self.manifest.get('hyperparameters', {})
 
-            # Routing (ML vs Rule-Based)
             is_ml = self.manifest.get("is_ml", False)
 
-            if is_ml:
-                # TODO: Inject MLBridge for MinMaxScaler transformations here
-                pass
+            # Resolve artifacts: caller-provided > disk > inline training
+            if artifacts is None and is_ml:
+                disk_artifacts = ArtifactManager.load_artifacts(self.strategy_dir)
+                if disk_artifacts:
+                    artifacts = disk_artifacts
+                    logger.info("Loaded persisted artifacts for inference.")
 
-            # Execution
-            artifacts = model.train(df_clean, context, hyperparams)
+            if artifacts is not None:
+                # Inference mode: apply saved scaler and skip training
+                if is_ml:
+                    feature_cols = [
+                        c for c in df_clean.columns
+                        if c.lower() not in {"open", "high", "low", "close", "volume"}
+                    ]
+                    df_clean = MLBridge.prepare_inference_matrix(
+                        df_clean, feature_cols, l_max=0, artifacts=artifacts
+                    )
+                raw_signals = model.generate_signals(
+                    df_clean, context, hyperparams, artifacts
+                )
+            elif is_ml:
+                # ML strategy without pre-trained artifacts: temporal split
+                # to prevent training and predicting on the same data.
+                split_point = int(len(df_clean) * 0.8)
+                df_train = df_clean.iloc[:split_point].copy()
+                df_eval = df_clean  # generate signals on full range
 
-            # TODO: ArtifactManager should save/load here if splitting Train and Inference
+                feature_cols = [
+                    c for c in df_clean.columns
+                    if c.lower() not in {"open", "high", "low", "close", "volume"}
+                ]
 
-            raw_signals = model.generate_signals(df_clean, context, hyperparams, artifacts)
+                # Fit scaler on train split only
+                df_train_scaled, scaler = MLBridge.prepare_training_matrix(
+                    df_train, feature_cols, l_max=0
+                )
 
-            # Grab the compression mode from the user's manifest, default to 'clip'
+                artifacts = model.train(df_train_scaled, context, hyperparams)
+                artifacts["system_scaler"] = scaler
+
+                # Apply saved scaler to full dataset for signal generation
+                df_eval = MLBridge.prepare_inference_matrix(
+                    df_eval, feature_cols, l_max=0, artifacts=artifacts
+                )
+
+                logger.warning(
+                    "ML backtest without saved artifacts: trained on first 80%% "
+                    "of data. Run TRAIN mode for proper cross-validated results."
+                )
+                raw_signals = model.generate_signals(
+                    df_eval, context, hyperparams, artifacts
+                )
+            else:
+                # Rule-based strategy: train() returns static artifacts,
+                # no data leakage risk from in-sample signal generation.
+                artifacts = model.train(df_clean, context, hyperparams)
+                raw_signals = model.generate_signals(
+                    df_clean, context, hyperparams, artifacts
+                )
+
             comp_mode = self.manifest.get('compression_mode', 'clip')
 
-            # Squash it. If the user breaks the rules, this throws a StrategyError and halts the run safely.
             clean_signals = SignalValidator.validate_and_compress(
                 raw_signals=raw_signals,
                 target_index=df_clean.index,
@@ -483,17 +576,26 @@ class LocalBacktester:
             logger.error(f"Grid search failed: {e}")
             raise StrategyError(f"Grid search failed: {e}")
 
-    def run_batch(self, datasets: Dict[str, pd.DataFrame], params: Optional[Dict[str, Any]] = None) -> Dict[str, pd.Series]:
-        """
-        Executes a batch of backtests across multiple assets efficiently.
+    def run_batch(
+        self,
+        datasets: Dict[str, pd.DataFrame],
+        params: Optional[Dict[str, Any]] = None,
+        artifacts: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, pd.Series]:
+        """Executes a batch of backtests across multiple assets efficiently.
+
+        When ``artifacts`` are provided, each asset is run in inference mode
+        (no inline training, saved scaler applied for ML strategies).
 
         Args:
-            datasets (Dict[str, pd.DataFrame]): A dictionary mapping ticker symbols to
-                their respective raw OHLCV DataFrames.
-            params (Optional[Dict[str, Any]]): Strategy hyperparameters.
+            datasets: A dictionary mapping ticker symbols to their respective
+                raw OHLCV DataFrames.
+            params: Strategy hyperparameters.
+            artifacts: Pre-trained artifacts to use for all assets. When
+                ``None``, each asset trains inline or loads from disk.
 
         Returns:
-            Dict[str, pd.Series]: A dictionary mapping ticker symbols to their generated signals.
+            A dictionary mapping ticker symbols to their generated signals.
         """
         results = {}
         if not datasets:
@@ -506,6 +608,17 @@ class LocalBacktester:
             features_config = self.manifest.get('features', [])
             feature_ids = [f['id'] for f in features_config]
             hyperparams = params if params is not None else self.manifest.get('hyperparameters', {})
+            is_ml = self.manifest.get("is_ml", False)
+
+            # Resolve artifacts once for the batch
+            batch_artifacts = artifacts
+            if batch_artifacts is None and is_ml:
+                disk_artifacts = ArtifactManager.load_artifacts(self.strategy_dir)
+                if disk_artifacts:
+                    batch_artifacts = disk_artifacts
+                    logger.info("Loaded persisted artifacts for batch inference.")
+
+            price_norm = self.manifest.get("training", {}).get("price_normalization", "none")
 
             for ticker, df_raw in datasets.items():
                 logger.info(f"Processing batch execution for {ticker}")
@@ -515,14 +628,62 @@ class LocalBacktester:
                     # Apply Universal Warmup Purge
                     df_clean = df_full.iloc[l_max:].copy()
 
+                    # Match any price normalization applied during training
+                    if price_norm != "none":
+                        df_clean = MLBridge.apply_price_normalization(df_clean, price_norm)
+
                     self._audit_nans(df_clean, feature_ids)
 
                     # Instantiate fresh objects to prevent state leakage between assets
                     model = model_class()
                     context = context_class() if context_class else None
 
-                    artifacts = model.train(df_clean, context, hyperparams)
-                    signals = model.generate_signals(df_clean, context, hyperparams, artifacts)
+                    if batch_artifacts is not None:
+                        # Inference mode
+                        if is_ml:
+                            feature_cols = [
+                                c for c in df_clean.columns
+                                if c.lower() not in {"open", "high", "low", "close", "volume"}
+                            ]
+                            df_clean = MLBridge.prepare_inference_matrix(
+                                df_clean, feature_cols, l_max=0,
+                                artifacts=batch_artifacts,
+                            )
+                        signals = model.generate_signals(
+                            df_clean, context, hyperparams, batch_artifacts
+                        )
+                    elif is_ml:
+                        # ML without artifacts: temporal split to avoid
+                        # training and predicting on the same data.
+                        feature_cols = [
+                            c for c in df_clean.columns
+                            if c.lower() not in {"open", "high", "low", "close", "volume"}
+                        ]
+                        split_point = int(len(df_clean) * 0.8)
+                        df_train = df_clean.iloc[:split_point].copy()
+
+                        df_train_scaled, scaler = MLBridge.prepare_training_matrix(
+                            df_train, feature_cols, l_max=0
+                        )
+                        inline_artifacts = model.train(
+                            df_train_scaled, context, hyperparams
+                        )
+                        inline_artifacts["system_scaler"] = scaler
+
+                        df_eval = MLBridge.prepare_inference_matrix(
+                            df_clean, feature_cols, l_max=0,
+                            artifacts=inline_artifacts,
+                        )
+                        signals = model.generate_signals(
+                            df_eval, context, hyperparams, inline_artifacts
+                        )
+                    else:
+                        # Rule-based: no data leakage risk
+                        inline_artifacts = model.train(df_clean, context, hyperparams)
+                        signals = model.generate_signals(
+                            df_clean, context, hyperparams, inline_artifacts
+                        )
+
                     results[ticker] = signals
                 except Exception as e:
                     logger.error(f"Batch execution failed for {ticker}: {e}")

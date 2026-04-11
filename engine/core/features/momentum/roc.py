@@ -26,7 +26,7 @@ class ROC(Feature):
     def parameters(self) -> Dict[str, Any]:
         return {
             "period": 12,
-            "normalize": "none"
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:

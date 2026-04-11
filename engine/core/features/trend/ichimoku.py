@@ -37,7 +37,7 @@ class IchimokuCloud(Feature):
             "base_period": 26,
             "lagging_span2_period": 52,
             "displacement": 26,
-            "normalize": "none",
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"],
         }
 
     @property
@@ -72,8 +72,13 @@ class IchimokuCloud(Feature):
         # Senkou Span B (Leading Span B) shifted forward
         senkou_b = ((high.rolling(window=span2).max() + low.rolling(window=span2).min()) / 2).shift(disp)
 
-        # Chikou Span (Lagging Span) shifted backwards
-        chikou_span = close.shift(-disp)
+        # Chikou Span — causal version.
+        # The traditional chikou uses shift(-disp) which leaks future close
+        # prices into the feature matrix.  The causal equivalent brings the
+        # past close to the present: close from `disp` bars ago.  Strategies
+        # can compare current close to this value for the same trend signal
+        # without lookahead.
+        chikou_span = close.shift(disp)
 
         col_tenkan = self.generate_column_name("Ichimoku", params, "tenkan")
         col_kijun = self.generate_column_name("Ichimoku", params, "kijun")

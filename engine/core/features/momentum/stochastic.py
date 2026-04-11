@@ -21,7 +21,7 @@ class Stochastic(Feature):
         return {
             "k_period": 14,
             "d_period": 3,
-            "normalize": "none"
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
     @property

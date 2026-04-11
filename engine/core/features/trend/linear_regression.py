@@ -34,7 +34,7 @@ class LinearRegressionChannel(Feature):
         return {
             "lookback": 100,
             "std_dev": 2.0,
-            "normalize": "none",
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"],
         }
 
     @property

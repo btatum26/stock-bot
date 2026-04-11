@@ -23,7 +23,7 @@ class KeltnerChannels(Feature):
             "ema_period": 20,
             "atr_period": 10,
             "multiplier": 2.0,
-            "normalize": "none"
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
     @property

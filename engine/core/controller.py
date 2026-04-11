@@ -12,9 +12,17 @@ from .workspace import WorkspaceManager
 from .backtester import LocalBacktester
 from .metrics import Tearsheet
 from .optimization.optimizer_core import OptimizerCore
+from .trainer import LocalTrainer
 from .logger import logger
 from .exceptions import StrategyError, ValidationError
 from .config import config
+
+
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    """Convert an optional date string to a datetime, or return None."""
+    if value is None:
+        return None
+    return datetime.fromisoformat(value)
 
 class ExecutionMode(str, Enum):
     TRAIN = "TRAIN"
@@ -38,23 +46,66 @@ class JobPayload(BaseModel):
     multi_asset_mode: MultiAssetMode = MultiAssetMode.BATCH
 
 class SignalModel(ABC):
-    """Interface for user-defined trading strategies."""
-    
-    @abstractmethod
-    def train(self, df: pd.DataFrame, context: Any, params: dict) -> dict:
-        """
-        Execute the training logic for the strategy.
-        Returns a dictionary of generated artifacts (e.g. weights, thresholds).
-        """
-        pass
+    """Interface for user-defined trading strategies.
+
+    Rule-based (non-ML) strategies implement ``train()`` + ``generate_signals()``.
+
+    ML strategies (``is_ml: true`` in manifest.json) implement
+    ``build_labels()`` + ``fit_model()`` + ``generate_signals()``. The
+    trainer calls ``build_labels`` once per ticker (so author code only
+    ever sees a single asset), concatenates the resulting (X, y) across
+    tickers, then calls ``fit_model`` once on the pooled matrix.
+    """
 
     @abstractmethod
     def generate_signals(self, df: pd.DataFrame, context: Any, params: dict, artifacts: dict) -> pd.Series:
-        """
-        Execute signal generation logic.
+        """Execute signal generation logic.
+
         Returns a Pandas Series with values between -1.0 and 1.0.
         """
         pass
+
+    def train(self, df: pd.DataFrame, context: Any, params: dict) -> dict:
+        """Rule-based training hook.
+
+        Default no-op. Non-ML strategies override this to fit rules,
+        thresholds, or cached intermediates. ML strategies ignore this
+        and use ``build_labels`` + ``fit_model`` instead.
+        """
+        return {}
+
+    def build_labels(self, df: pd.DataFrame, context: Any, params: dict) -> pd.Series:
+        """ML label-construction hook. Called once per ticker.
+
+        Given a single-asset DataFrame (features + OHLCV), return a
+        Series aligned to ``df.index`` containing the target label per
+        row. Use ``NaN`` for rows that cannot be labeled (e.g. the last
+        ``lookforward`` bars where forward returns aren't available).
+
+        The trainer drops NaN rows, concatenates across tickers, and
+        hands the pooled matrix to ``fit_model``.
+        """
+        raise NotImplementedError(
+            "ML strategies must override build_labels()"
+        )
+
+    def fit_model(self, X, y, params: dict) -> dict:
+        """ML fit hook. Called once on the pooled (X, y) matrix.
+
+        Args:
+            X: 2D numpy array of shape ``(n_samples, n_features)`` with
+                all tickers concatenated.
+            y: 1D numpy array of labels, aligned to X.
+            params: Strategy hyperparameters.
+
+        Returns:
+            Artifact dictionary (e.g. ``{"model": clf}``). The trainer
+            will add ``feature_cols`` and ``system_scaler`` before
+            inference.
+        """
+        raise NotImplementedError(
+            "ML strategies must override fit_model()"
+        )
 
 class ApplicationController:
     """Orchestrates high-level system operations including data, workspace, and execution."""
@@ -128,8 +179,8 @@ class ApplicationController:
         datasets = {}
         for ticker in assets:
             logger.info(f"Fetching data for {ticker} ({interval})")
-            df_raw = self.broker.get_data(ticker, interval, start, end)
-            
+            df_raw = self.broker.get_data(ticker, interval, _parse_dt(start), _parse_dt(end))
+
             if df_raw.empty:
                 logger.warning(f"No data available for {ticker} in requested range.")
                 continue
@@ -164,16 +215,39 @@ class ApplicationController:
 
         return all_metrics
 
-    def _handle_train(self, strat_path: str, assets: List[str], interval: str, 
+    def _handle_train(self, strat_path: str, assets: List[str], interval: str,
                       timeframe: Timeframe, payload: JobPayload):
-        """Executes the optimization and training pipeline."""
-        ticker = assets[0]
-        dataset_ref = f"{ticker}_{interval}"
-        
-        logger.info(f"Initializing optimization for {ticker}")
-        
-        # Ensure data is cached before optimization starts
-        self.broker.get_data(ticker, interval, timeframe.start, timeframe.end)
+        """Executes the optimization and training pipeline.
+
+        Supports single- or multi-ticker training. For multi-ticker, all
+        assets are fetched and passed to ``LocalTrainer`` as a dict; the
+        trainer pools labels across tickers and fits one model on the
+        stacked matrix.
+
+        Two-phase process:
+            **Phase A (optional):** Hyperparameter search via ``OptimizerCore``.
+            **Phase B:** Data splitting, training, validation via ``LocalTrainer``.
+        """
+        if not assets:
+            raise ValidationError("No assets provided for training")
+
+        # Fetch data for every requested ticker
+        datasets: Dict[str, pd.DataFrame] = {}
+        for ticker in assets:
+            logger.info(f"Fetching data for {ticker} ({interval})")
+            df = self.broker.get_data(
+                ticker, interval,
+                _parse_dt(timeframe.start), _parse_dt(timeframe.end),
+            )
+            if df.empty:
+                logger.warning(f"No data available for {ticker}; skipping.")
+                continue
+            datasets[ticker] = df
+
+        if not datasets:
+            raise StrategyError("No data available for any requested ticker")
+
+        logger.info(f"Training pipeline initialized for {list(datasets.keys())}")
 
         manifest_path = os.path.join(strat_path, "manifest.json")
         try:
@@ -183,20 +257,60 @@ class ApplicationController:
             logger.error(f"Failed to load manifest at {manifest_path}: {e}")
             raise StrategyError(f"Could not load manifest for {strat_path}")
 
+        # Phase A: Hyperparameter search (if bounds are defined)
+        param_bounds = manifest.get("parameter_bounds", {})
+        has_searchable_bounds = param_bounds and any(
+            isinstance(v, list) and len(v) > 1 for v in param_bounds.values()
+        )
+
+        if has_searchable_bounds:
+            # TODO: Multi-ticker HPO. For now the optimizer runs on the
+            # first ticker only; its grid-search worker operates on one
+            # shared-memory dataset. Results are directionally useful but
+            # not truly optimal for a pooled model.
+            first_ticker = next(iter(datasets.keys()))
+            dataset_ref = f"{first_ticker}_{interval}"
+            if len(datasets) > 1:
+                logger.warning(
+                    f"Optimizer runs on {first_ticker} only; other tickers "
+                    "are ignored during HPO. (TODO: multi-ticker HPO)"
+                )
+            logger.info("Parameter bounds detected. Running optimizer Phase A.")
+            try:
+                optimizer = OptimizerCore(
+                    strategy_path=strat_path,
+                    dataset_ref=dataset_ref,
+                    manifest=manifest,
+                    ticker=first_ticker,
+                    interval=interval,
+                    start=timeframe.start,
+                    end=timeframe.end,
+                )
+                searched_params = optimizer.discover_params()
+            except Exception as e:
+                logger.error(f"Optimization failed: {e}", exc_info=True)
+                raise StrategyError(f"Optimization failed: {e}")
+            optimal_params = {**manifest.get("hyperparameters", {}), **searched_params}
+            logger.info(f"Optimal parameters: {optimal_params}")
+        else:
+            optimal_params = manifest.get("hyperparameters", {})
+            logger.info("No searchable parameter bounds. Using default hyperparameters.")
+
+        # Phase B: Train with proper data splitting and validation
         try:
-            optimizer = OptimizerCore(
-                strategy_path=strat_path,
-                dataset_ref=dataset_ref,
-                manifest=manifest,
-                ticker=ticker,
-                interval=interval,
-                start=timeframe.start,
-                end=timeframe.end
-            )
-            return optimizer.run()
+            trainer = LocalTrainer(strat_path)
+            # Single-ticker: unwrap to DataFrame for the legacy path.
+            # Multi-ticker: pass the dict; trainer pools across tickers.
+            if len(datasets) == 1:
+                only_df = next(iter(datasets.values()))
+                results = trainer.run(only_df, params=optimal_params)
+            else:
+                results = trainer.run(datasets, params=optimal_params)
+            results["optimal_params"] = optimal_params
+            return results
         except Exception as e:
-            logger.error(f"Optimization failed: {e}", exc_info=True)
-            raise StrategyError(f"Optimization failed: {e}")
+            logger.error(f"Training failed: {e}", exc_info=True)
+            raise StrategyError(f"Training failed: {e}")
 
     def _handle_signal_only(self, strat_path: str, assets: Union[str, List[str]], interval: str, 
                             start: Optional[str], end: Optional[str]):
@@ -211,8 +325,8 @@ class ApplicationController:
         
         for ticker in assets:
             logger.info(f"Fetching data to generate signals for {ticker}")
-            df_raw = self.broker.get_data(ticker, interval, start, end)
-            
+            df_raw = self.broker.get_data(ticker, interval, _parse_dt(start), _parse_dt(end))
+
             if df_raw.empty:
                 results[ticker] = {"error": "No data found"}
                 continue

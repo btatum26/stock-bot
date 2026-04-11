@@ -30,7 +30,7 @@ class Supertrend(Feature):
         return {
             "period": 10,
             "multiplier": 3.0,
-            "normalize": "none",
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"],
         }
 
     @property

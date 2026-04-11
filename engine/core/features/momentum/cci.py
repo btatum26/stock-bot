@@ -32,7 +32,7 @@ class CCI(Feature):
             "period": 20,
             "overbought": 100,
             "oversold": -100,
-            "normalize": "none",
+            "normalize": ["none", "z_score", "pct_distance", "price_ratio"],
         }
 
     @property
