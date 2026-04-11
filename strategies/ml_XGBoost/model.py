@@ -6,7 +6,7 @@ from context import Context
 from engine.core.controller import SignalModel
 
 
-class RandomForestModel(SignalModel):
+class XGBoostModel(SignalModel):
     """Long-only XGBoost regime classifier.
 
     Predicts one of three regimes over a lookforward window:

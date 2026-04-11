@@ -17,12 +17,14 @@ class ParamsContext:
     """Typed strategy hyperparameters."""
     stop_loss: float = 0.1
     take_profit: float = 1000.0
-    n_estimators: int = 200
+    n_estimators: int = 300
     max_depth: int = 5
-    min_samples_leaf: int = 20
-    lookforward: int = 30
-    up_threshold: float = 0.05
-    down_threshhold: float = -0.03
+    min_child_weight: int = 20
+    colsample_bytree: float = 0.8
+    reg_lambda: float = 1.0
+    subsample: float = 0.8
+    reg_alpha: float = 0.0
+    gamma: float = 0.0
 
 
 @dataclass(frozen=True)
