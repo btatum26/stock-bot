@@ -227,7 +227,7 @@ class FeatureOrchestrator:
                 if new_cols:
                     df = pd.concat([df, pd.DataFrame(new_cols)], axis=1)
                     df = df.loc[:, ~df.columns.duplicated()]
-            
+
         return df, l_max
 
     def _raise_memory_violation(self, feature_id: str):
