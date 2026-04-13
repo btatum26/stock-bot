@@ -8,6 +8,12 @@ class FeaturesContext:
     MovingAverage_50_EMA: str = 'MovingAverage_50_EMA'
     MovingAverage_200_EMA: str = 'MovingAverage_200_EMA'
     AverageTrueRange_14: str = 'AverageTrueRange_14'
+    SIN: str = 'YearlyCycle_SIN'
+    COS: str = 'YearlyCycle_COS'
+    LAST_SUPPORT_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_LAST_SUPPORT_LEVEL'
+    LAST_RESISTANCE_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_LAST_RESISTANCE_LEVEL'
+    NEAREST_SUPPORT_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_NEAREST_SUPPORT_LEVEL'
+    NEAREST_RESISTANCE_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_NEAREST_RESISTANCE_LEVEL'
 
 
 @dataclass(frozen=True)
