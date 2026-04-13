@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import keyword
 from typing import List, Dict, Any
@@ -98,7 +99,9 @@ class WorkspaceManager:
                 base_attr = fid.upper()
             else:
                 param_str = "_".join([str(v) for k, v in sorted(core_params.items())])
-                base_attr = f"{fid.upper()}_{param_str}"
+                # Sanitize: replace any character that isn't alphanumeric or _ with _
+                safe_str  = re.sub(r'[^A-Za-z0-9_]', '_', param_str)
+                base_attr = f"{fid.upper()}_{safe_str}"
                 
             # Iterate over outputs to handle MACD, Bollinger Bands, etc.
             for output in outputs:
