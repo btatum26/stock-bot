@@ -1,0 +1,139 @@
+{
+    "features": [
+        {
+            "id": "RSI",
+            "params": {
+                "period": 14
+            }
+        },
+        {
+            "id": "BollingerBands",
+            "params": {
+                "period": 20,
+                "std_dev": 2.0
+            }
+        },
+        {
+            "id": "AverageTrueRange",
+            "params": {
+                "period": 14,
+                "normalize": "none"
+            }
+        },
+        {
+            "id": "AverageTrueRange",
+            "params": {
+                "period": 14,
+                "normalize": "pct_distance"
+            }
+        },
+        {
+            "id": "ADX",
+            "params": {
+                "period": 14
+            }
+        },
+        {
+            "id": "MovingAverage",
+            "params": {
+                "period": 20,
+                "type": "EMA",
+                "normalize": "none"
+            }
+        },
+        {
+            "id": "MovingAverage",
+            "params": {
+                "period": 50,
+                "type": "EMA",
+                "normalize": "none"
+            }
+        },
+        {
+            "id": "MovingAverage",
+            "params": {
+                "period": 200,
+                "type": "EMA",
+                "normalize": "none"
+            }
+        },
+        {
+            "id": "MovingAverage",
+            "params": {
+                "period": 50,
+                "type": "EMA",
+                "normalize": "pct_distance"
+            }
+        },
+        {
+            "id": "YearlyCycle",
+            "params": {}
+        },
+        {
+            "id": "SupportResistance",
+            "params": {
+                "method": "Bill Williams",
+                "threshold_pct": 0.015,
+                "window": 35,
+                "clustering_pct": 0.02,
+                "min_strength": 1.0
+            }
+        }
+    ],
+    "is_ml": true,
+    "hyperparameters": {
+        "stop_loss": 0.07,
+        "n_estimators": 300,
+        "max_depth": 4,
+        "learning_rate": 0.05,
+        "min_child_weight": 5,
+        "subsample": 0.7,
+        "colsample_bytree": 0.7,
+        "reg_lambda": 2.0,
+        "reg_alpha": 0.1,
+        "gamma": 0.1,
+        "lookforward": 20,
+        "max_drawdown_threshold": 0.05,
+        "min_profit_threshold": 0.03,
+        "low_vol_threshold": 0.25,
+        "high_vol_threshold": 0.75,
+        "atr_lookback": 252,
+        "vol_expansion_limit": 0.1,
+        "entry_quality_threshold": 0.35,
+        "min_adx_entry": 20,
+        "max_rsi_entry": 75,
+        "max_bb_pct_b_entry": 0.95,
+        "resistance_buffer_pct": 0.02,
+        "trailing_stop_pct": 0.1,
+        "max_hold_days": 60
+    },
+    "parameter_bounds": {
+        "stop_loss": [
+            0.04,
+            0.12
+        ],
+        "low_vol_threshold": [
+            0.15,
+            0.35
+        ],
+        "high_vol_threshold": [
+            0.65,
+            0.85
+        ],
+        "entry_quality_threshold": [
+            0.25,
+            0.5
+        ],
+        "max_drawdown_threshold": [
+            0.03,
+            0.08
+        ],
+        "min_profit_threshold": [
+            0.02,
+            0.06
+        ]
+    },
+    "training": {
+        "price_normalization": "none"
+    }
+}

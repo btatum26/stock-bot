@@ -221,5 +221,6 @@ class DataBroker:
             df_final = pd.read_sql(stmt, session.bind)
             if not df_final.empty:
                 df_final.set_index('timestamp', inplace=True)
+                df_final.index = pd.to_datetime(df_final.index)
 
         return df_final[['open', 'high', 'low', 'close', 'volume']]

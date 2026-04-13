@@ -860,7 +860,8 @@ class LocalTrainer:
         """
         all_dates = pd.DatetimeIndex([])
         for p in prepared.values():
-            all_dates = all_dates.union(p["df_clean"].index)
+            idx = pd.DatetimeIndex(p["df_clean"].index)
+            all_dates = all_dates.union(idx)
         all_dates = all_dates.sort_values()
 
         n = len(all_dates)

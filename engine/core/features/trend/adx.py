@@ -53,11 +53,11 @@ class ADX(Feature):
         
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-        
+
         # Smoothed values using Wilder's Smoothing (EMA with alpha=1/N)
-        tr_smooth = pd.Series(tr).ewm(alpha=1/period, adjust=False).mean()
-        plus_dm_smooth = pd.Series(plus_dm).ewm(alpha=1/period, adjust=False).mean()
-        minus_dm_smooth = pd.Series(minus_dm).ewm(alpha=1/period, adjust=False).mean()
+        tr_smooth = pd.Series(tr, index=df.index).ewm(alpha=1/period, adjust=False).mean()
+        plus_dm_smooth = pd.Series(plus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean()
+        minus_dm_smooth = pd.Series(minus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean()
         
         # Directional Indicators
         plus_di = 100 * (plus_dm_smooth / tr_smooth.replace(0, 1e-9))
