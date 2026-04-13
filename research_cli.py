@@ -356,6 +356,21 @@ def cmd_edit(engine: ModelEngine, args) -> None:
     print(f"\n[+] Saved and synced: {name}")
 
 
+def cmd_sync(engine: ModelEngine, args) -> None:
+    """
+    Regenerate context.py for a strategy from its current manifest.json.
+
+    Useful after changing a feature's output schema (e.g. adding new output
+    columns) without touching the manifest itself. Reads the existing config
+    and re-saves it, which triggers WorkspaceManager to regenerate context.py.
+    """
+    name = args.strategy
+    cfg  = engine.get_strategy_config(name)
+    engine.save_strategy_config(name, cfg)
+    print(f"\n[+] Synced context.py for: {name}")
+    print(f"    Run `show-context {name}` to verify the updated attributes.")
+
+
 def cmd_backtest(engine: ModelEngine, args) -> None:
     """
     Run a vectorized backtest for a strategy against one or more tickers.
@@ -766,6 +781,7 @@ commands:
   inspect  <strategy>     Show full strategy config
   init     <strategy>     Scaffold a new strategy workspace
   edit     <strategy>     Modify a strategy's manifest and sync workspace
+  sync     <strategy>     Regenerate context.py from the current manifest (no manifest changes)
   show-context <strategy> Print generated context.py (attribute names for model.py)
   show-model   <strategy> Print current model.py
   data-info               Show cached OHLCV data (tickers, intervals, date ranges)
@@ -811,6 +827,10 @@ commands:
                    help="Remove hyperparameter(s) by key")
     p.add_argument("--set-bound",      metavar="key=lo,hi", nargs="+",
                    help="Set parameter bound(s), e.g. --set-bound oversold=20.0,40.0")
+
+    # sync ────────────────────────────────────────────────────────────────────
+    p = sub.add_parser("sync", help="Regenerate context.py from the current manifest (no manifest changes)")
+    p.add_argument("strategy")
 
     # show-context ────────────────────────────────────────────────────────────
     p = sub.add_parser("show-context", help="Print generated context.py (attribute names for model.py)")
@@ -870,6 +890,7 @@ _DISPATCH = {
     "inspect":      cmd_inspect,
     "init":         cmd_init,
     "edit":         cmd_edit,
+    "sync":         cmd_sync,
     "show-context": cmd_show_context,
     "show-model":   cmd_show_model,
     "data-info":    cmd_data_info,
