@@ -1,10 +1,10 @@
 """
-research_cli.py  —  Research Engine CLI
+research_cli.py  --  Research Engine CLI
 
 Run from the repo root:
     python research_cli.py <command> [options]
 
-Uses ModelEngine (engine/bridge.py) — the same facade the GUI uses.
+Uses ModelEngine (engine/bridge.py) -- the same facade the GUI uses.
 """
 
 import argparse
@@ -14,8 +14,14 @@ import logging
 import os
 import sys
 import traceback
+import warnings
 from datetime import datetime, timedelta
 from typing import List, Optional
+
+# Suppress numpy/pandas NaN and divide-by-zero RuntimeWarnings -- they are
+# expected during feature computation on sparse data and clutter the output.
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 # ── Bootstrap: ensure the engine package is importable from repo root ─────────
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -57,16 +63,15 @@ def _progress_bar(pct: int) -> str:
 def _make_callbacks(silent: bool = False) -> dict:
     """
     Produces a callbacks dict compatible with ModelEngine execution methods.
-    Progress lines overwrite in place; log lines stream below.
+    Progress bar overwrites a single line in place; log lines are suppressed.
     """
     def on_progress(pct: int, msg: str) -> None:
         if not silent:
             bar = _progress_bar(pct)
-            print(f"  [{bar}] {pct:3d}%  {msg}")
+            print(f"\r  [{bar}] {pct:3d}%  {msg:<40}", end="", flush=True)
 
     def on_log(msg: str) -> None:
-        if not silent:
-            print(f"       {msg}")
+        pass  # suppressed; progress bar communicates status
 
     return {
         "is_cancelled": lambda: False,
@@ -76,7 +81,7 @@ def _make_callbacks(silent: bool = False) -> dict:
 
 # ── Type coercion ─────────────────────────────────────────────────────────────
 def _coerce(value: str):
-    """Try int → float → str."""
+    """Try int -> float -> str."""
     try:
         return int(value)
     except ValueError:
@@ -393,8 +398,8 @@ def cmd_backtest(engine: ModelEngine, args) -> None:
     }
 
     _header(
-        f"BACKTEST  ·  {args.strategy}  ·  {', '.join(tickers)}  ·  {args.interval}\n"
-        f"{start_dt.date()} → {end_dt.date()}  ·  Capital: ${args.capital:,.0f}"
+        f"BACKTEST  |  {args.strategy}  |  {', '.join(tickers)}  |  {args.interval}\n"
+        f"{start_dt.date()} -> {end_dt.date()}  |  Capital: ${args.capital:,.0f}"
     )
 
     callbacks = _make_callbacks()
@@ -418,7 +423,7 @@ def cmd_backtest(engine: ModelEngine, args) -> None:
     trade_logs  = result.get("trade_logs", {})
 
     if not metrics_map:
-        print("\n  No results returned — check that data is available for the given tickers/interval.")
+        print("\n  No results returned -- check that data is available for the given tickers/interval.")
         return
 
     # ── Per-ticker results ────────────────────────────────────────────────────
@@ -467,7 +472,7 @@ def cmd_backtest(engine: ModelEngine, args) -> None:
         # Trade log
         trades = trade_logs.get(ticker, [])
         if trades:
-            print(f"\n    Trade Log — {len(trades)} trades (showing last 5)")
+            print(f"\n    Trade Log -- {len(trades)} trades (showing last 5)")
             print(f"    {'Entry':<12}  {'Exit':<12}  {'Side':<6}  {'Return':>8}")
             print(f"    {'-'*48}")
             for t in trades[-5:]:
@@ -475,7 +480,7 @@ def cmd_backtest(engine: ModelEngine, args) -> None:
                 exit_ = str(t.get("exit_date",  ""))[:10]
                 side  = str(t.get("side", ""))
                 ret   = t.get("trade_return", t.get("return"))
-                ret_s = f"{ret:+.2%}" if isinstance(ret, float) else str(ret or "—")
+                ret_s = f"{ret:+.2%}" if isinstance(ret, float) else str(ret or "--")
                 print(f"    {entry:<12}  {exit_:<12}  {side:<6}  {ret_s:>8}")
 
 
@@ -488,7 +493,7 @@ def cmd_train(engine: ModelEngine, args) -> None:
     via _CallbackLogHandler in bridge.py so trial-by-trial output, warnings,
     and errors all stream live to stdout.
 
-    The final result dict is rendered recursively — nested dicts are indented,
+    The final result dict is rendered recursively -- nested dicts are indented,
     floats are shown to 4 decimal places.
     """
     tickers = [t.strip().upper() for t in args.tickers.split(",")]
@@ -500,8 +505,8 @@ def cmd_train(engine: ModelEngine, args) -> None:
     }
 
     _header(
-        f"TRAINING  ·  {args.strategy}  ·  {', '.join(tickers)}  ·  {args.interval}\n"
-        f"{start_dt.date()} → {end_dt.date()}"
+        f"TRAINING  |  {args.strategy}  |  {', '.join(tickers)}  |  {args.interval}\n"
+        f"{start_dt.date()} -> {end_dt.date()}"
     )
 
     callbacks = _make_callbacks()
@@ -522,6 +527,193 @@ def cmd_train(engine: ModelEngine, args) -> None:
     _render_result_dict(result, indent=4)
 
 
+def cmd_portfolio(engine: ModelEngine, args) -> None:
+    """
+    Run a multi-asset portfolio backtest and print a full tearsheet.
+
+    Generates signals for each ticker via the strategy's model, then runs
+    the PortfolioBacktester simulation (T+1 execution, 2% risk rule, lazy
+    rebalancing).  Output includes:
+
+      - Summary metrics (CAGR, Sharpe, max drawdown, turnover, etc.)
+      - ASCII equity curve sketch
+      - Per-ticker P&L contribution bar chart
+      - Exit-reason breakdown
+      - Full trade log (last N rows; use --trades 0 for all)
+    """
+    tickers   = [t.strip().upper() for t in args.tickers.split(",")]
+    start_dt, end_dt = _resolve_dates(args.start, args.end, default_lookback_days=365)
+    timeframe = {
+        "start":    start_dt.isoformat(),
+        "end":      end_dt.isoformat(),
+        "interval": args.interval,
+    }
+
+    config_dict = {
+        "starting_capital":      args.capital,
+        "max_positions":         args.max_positions,
+        "risk_per_trade_pct":    args.risk_pct,
+        "stop_loss_pct":         args.stop_pct,
+        "max_position_pct":      args.max_pos_pct,
+        "entry_threshold":       args.entry_threshold,
+        "eviction_margin":       args.eviction_margin,
+        "friction":              args.friction,
+        "rebalance_on_strength": args.rebalance,
+        "rebalance_delta":       args.rebalance_delta,
+        "allow_short":           not args.no_short,
+    }
+
+    _header(
+        f"PORTFOLIO  |  {args.strategy}  |  {', '.join(tickers[:5])}"
+        + (f" (+{len(tickers)-5} more)" if len(tickers) > 5 else "")
+        + f"  |  {args.interval}\n"
+        f"{start_dt.date()} -> {end_dt.date()}  |  Capital: ${args.capital:,.0f}"
+        + (f"  |  MaxPos: {args.max_positions}" )
+        + (f"  |  Short: {'yes' if not args.no_short else 'no'}")
+    )
+
+    callbacks = _make_callbacks()
+    try:
+        result = engine.run_portfolio_backtest(
+            args.strategy, tickers, timeframe, callbacks,
+            config_dict=config_dict,
+        )
+    except Exception as e:
+        if args.debug:
+            traceback.print_exc()
+        else:
+            print(f"\n  FATAL: {e}")
+        sys.exit(1)
+
+    if result.get("cancelled"):
+        print("\n  Portfolio backtest was cancelled.")
+        return
+
+    metrics     = result.get("metrics", {})
+    equity_pts  = result.get("equity_curve", [])
+    contrib     = result.get("per_ticker_contribution", {})
+    trade_log   = result.get("trade_log", [])
+    start_cap   = result.get("starting_capital", args.capital)
+
+    if not metrics:
+        print("\n  No results -- check that data exists for the given tickers/interval.")
+        return
+
+    # ── 1. Summary metrics ────────────────────────────────────────────────────
+    PORTFOLIO_METRICS = [
+        ("Total Return (%)", "Total Return",       "{:+.2f}%"),
+        ("CAGR (%)",         "CAGR",               "{:+.2f}%"),
+        ("Sharpe Ratio",     "Sharpe Ratio",       "{:.3f}"),
+        ("Sortino Ratio",    "Sortino Ratio",      "{:.3f}"),
+        ("Calmar Ratio",     "Calmar Ratio",       "{:.3f}"),
+        ("Max Drawdown (%)", "Max Drawdown",       "{:.2f}%"),
+        ("Win Rate (%)",     "Win Rate",           "{:.1f}%"),
+        ("Avg Win (%)",      "Avg Win",            "{:+.3f}%"),
+        ("Avg Loss (%)",     "Avg Loss",           "{:+.3f}%"),
+        ("Total Trades",     "Total Trades",       "{}"),
+        ("Turnover (%)",     "Turnover (ann.)",    "{:.1f}%"),
+    ]
+
+    _section("Portfolio Summary")
+    final_val = equity_pts[-1]["v"] if equity_pts else start_cap
+    _row("Starting Capital",  f"${start_cap:>14,.2f}")
+    _row("Final Value",       f"${final_val:>14,.2f}")
+    _row("Net P&L",           f"${final_val - start_cap:>+14,.2f}")
+    print()
+
+    for key, label, fmt in PORTFOLIO_METRICS:
+        val = metrics.get(key)
+        if val is None:
+            continue
+        try:
+            formatted = fmt.format(val)
+        except (ValueError, TypeError):
+            formatted = str(val)
+        _row(label, formatted)
+
+    # ── 2. ASCII equity curve ─────────────────────────────────────────────────
+    if equity_pts:
+        _section("Equity Curve (ASCII)")
+        ROWS, COLS = 10, 60
+        vals = [p["v"] for p in equity_pts]
+        lo, hi = min(vals), max(vals)
+        span = hi - lo or 1.0
+        # Sample up to COLS points
+        step = max(1, len(vals) // COLS)
+        sampled = vals[::step][:COLS]
+        # Build grid
+        grid = [[" "] * len(sampled) for _ in range(ROWS)]
+        for x, v in enumerate(sampled):
+            row_idx = ROWS - 1 - int((v - lo) / span * (ROWS - 1))
+            row_idx = max(0, min(ROWS - 1, row_idx))
+            grid[row_idx][x] = "*"
+        hi_label = f"${hi:>10,.0f}"
+        lo_label = f"${lo:>10,.0f}"
+        for r, row in enumerate(grid):
+            prefix = hi_label if r == 0 else (lo_label if r == ROWS - 1 else " " * len(hi_label))
+            print(f"  {prefix}  |{''.join(row)}")
+        print(f"  {' ' * len(hi_label)}  +{'-' * len(sampled)}")
+        print(f"  {' ' * len(hi_label)}   {str(equity_pts[0]['t'])[:10]}  ->  {str(equity_pts[-1]['t'])[:10]}")
+
+    # ── 3. Per-ticker contribution ────────────────────────────────────────────
+    if contrib:
+        _section("Per-Ticker P&L Contribution")
+        sorted_contrib = sorted(contrib.items(), key=lambda x: x[1], reverse=True)
+        max_abs = max(abs(v) for _, v in sorted_contrib) or 1.0
+        BAR_W = 20
+        print(f"  {'Ticker':<10}  {'P&L':>12}   Contribution")
+        print(f"  {'-'*52}")
+        for ticker, pnl in sorted_contrib:
+            bar_len = int(abs(pnl) / max_abs * BAR_W)
+            bar = ("#" if pnl >= 0 else "-") * bar_len
+            sign = "+" if pnl >= 0 else ""
+            print(f"  {ticker:<10}  {sign}{pnl:>11,.2f}   {bar}")
+
+    # ── 4. Exit-reason breakdown ──────────────────────────────────────────────
+    if trade_log:
+        _section("Exit Reason Breakdown")
+        reason_counts: dict = {}
+        reason_pnl:   dict = {}
+        for trade in trade_log:
+            r = trade.get("exit_reason", "UNKNOWN")
+            reason_counts[r] = reason_counts.get(r, 0) + 1
+            reason_pnl[r]    = reason_pnl.get(r, 0.0) + trade.get("pnl", 0.0)
+        print(f"  {'Reason':<16}  {'Count':>6}  {'Net P&L':>12}")
+        print(f"  {'-'*38}")
+        for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1]):
+            pnl = reason_pnl[reason]
+            sign = "+" if pnl >= 0 else ""
+            print(f"  {reason:<16}  {count:>6}  {sign}{pnl:>11,.2f}")
+
+    # ── 5. Trade log ──────────────────────────────────────────────────────────
+    if trade_log:
+        n_show = args.trades if args.trades > 0 else len(trade_log)
+        trades_to_show = trade_log[-n_show:]
+        _section(f"Trade Log  ({len(trade_log)} total, showing last {len(trades_to_show)})")
+        hdr = (f"  {'#':>4}  {'Ticker':<8}  {'Dir':<6}  {'Entry':>10}  "
+               f"{'Exit':>10}  {'EntryPx':>8}  {'ExitPx':>8}  {'Shares':>8}  "
+               f"{'P&L':>10}  {'Ret%':>7}  {'Bars':>5}  {'Reason'}")
+        print(hdr)
+        print(f"  {'-'*len(hdr.rstrip())}")
+        for i, t in enumerate(trades_to_show, 1):
+            entry = str(t.get("entry_date", ""))[:10]
+            exit_ = str(t.get("exit_date",  ""))[:10]
+            pnl   = t.get("pnl", 0.0)
+            ret   = t.get("return_pct", 0.0)
+            sign  = "+" if pnl >= 0 else ""
+            rsign = "+" if ret >= 0 else ""
+            print(
+                f"  {i:>4}  {t.get('ticker',''):<8}  {t.get('direction',''):<6}  "
+                f"{entry:>10}  {exit_:>10}  "
+                f"{t.get('entry_price',0):>8.2f}  {t.get('exit_price',0):>8.2f}  "
+                f"{t.get('shares',0):>8.1f}  "
+                f"{sign}{pnl:>9,.2f}  {rsign}{ret:>6.2f}%  "
+                f"{t.get('bars_held',0):>5}  {t.get('exit_reason','')}"
+            )
+
+    print()
+
+
 def cmd_signal(engine: ModelEngine, args) -> None:
     """
     Generate current signals for a strategy against one or more tickers.
@@ -534,7 +726,7 @@ def cmd_signal(engine: ModelEngine, args) -> None:
     """
     tickers = [t.strip().upper() for t in args.tickers.split(",")]
 
-    _header(f"SIGNAL  ·  {args.strategy}  ·  {', '.join(tickers)}")
+    _header(f"SIGNAL  |  {args.strategy}  |  {', '.join(tickers)}")
 
     callbacks = _make_callbacks()
     try:
@@ -720,7 +912,7 @@ def cmd_validate(engine: ModelEngine, args) -> None:
         sys.exit(1)
     print(f"  [ok]  generate_signals method present")
 
-    # 5. Can instantiate (informational — constructor might require args)
+    # 5. Can instantiate (informational -- constructor might require args)
     try:
         signal_model_cls()
         print(f"  [ok]  {signal_model_cls.__name__}() instantiates cleanly")
@@ -772,7 +964,7 @@ def build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="research_cli.py",
-        description="Research Engine CLI — mirrors GUI access via ModelEngine",
+        description="Research Engine CLI -- mirrors GUI access via ModelEngine",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 commands:
@@ -786,9 +978,10 @@ commands:
   show-model   <strategy> Print current model.py
   data-info               Show cached OHLCV data (tickers, intervals, date ranges)
   validate     <strategy> Import-check model.py without running any data
-  backtest <strategy>     Run a vectorized backtest
-  train    <strategy>     Run hyperparameter optimisation / model training
-  signal   <strategy>     Generate live signals
+  backtest  <strategy>    Run a vectorized backtest
+  portfolio <strategy>    Run a multi-asset portfolio backtest (full tearsheet)
+  train     <strategy>    Run hyperparameter optimisation / model training
+  signal    <strategy>    Generate live signals
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -873,6 +1066,42 @@ commands:
     p.add_argument("--debug",    action="store_true",
                    help="Show full tracebacks on engine errors")
 
+    # portfolio ───────────────────────────────────────────────────────────────
+    p = sub.add_parser("portfolio", help="Run a multi-asset portfolio backtest")
+    p.add_argument("strategy")
+    p.add_argument("--tickers",          required=True,
+                   help="Comma-separated ticker symbols (e.g. AAPL,MSFT,NVDA)")
+    p.add_argument("--interval",         default="1d",
+                   help="Bar interval: 1d, 1h, 4h, 15m, 1w  (default: 1d)")
+    p.add_argument("--start",            help="Start date YYYY-MM-DD (default: 1 year ago)")
+    p.add_argument("--end",              help="End date   YYYY-MM-DD (default: today)")
+    p.add_argument("--capital",          type=float, default=100_000.0,
+                   help="Starting capital (default: 100000)")
+    p.add_argument("--max-positions",    type=int,   default=10,
+                   help="Max concurrent positions (default: 10)")
+    p.add_argument("--risk-pct",         type=float, default=0.02,
+                   help="Portfolio fraction risked per trade (default: 0.02 = 2%%)")
+    p.add_argument("--stop-pct",         type=float, default=0.05,
+                   help="Fixed stop-loss as fraction of entry price (default: 0.05 = 5%%)")
+    p.add_argument("--max-pos-pct",      type=float, default=0.20,
+                   help="Signal-scaled max size per position as fraction of portfolio (default: 0.20)")
+    p.add_argument("--entry-threshold",  type=float, default=0.10,
+                   help="Min |signal| to open a position (default: 0.10)")
+    p.add_argument("--eviction-margin",  type=float, default=0.15,
+                   help="New signal must exceed weakest by this to evict (default: 0.15)")
+    p.add_argument("--friction",         type=float, default=0.001,
+                   help="One-way transaction cost fraction (default: 0.001 = 0.1%%)")
+    p.add_argument("--rebalance",        action="store_true",
+                   help="Enable active rebalancing when signal shifts by --rebalance-delta")
+    p.add_argument("--rebalance-delta",  type=float, default=0.10,
+                   help="Min abs(signal change) to trigger a resize (default: 0.10, only active with --rebalance)")
+    p.add_argument("--no-short",         action="store_true",
+                   help="Disable short selling (long-only mode)")
+    p.add_argument("--trades",           type=int,   default=20,
+                   help="Number of trades to print in the log (default: 20; 0 = all)")
+    p.add_argument("--debug",            action="store_true",
+                   help="Show full tracebacks on engine errors")
+
     # signal ──────────────────────────────────────────────────────────────────
     p = sub.add_parser("signal", help="Generate live signals for a strategy")
     p.add_argument("strategy")
@@ -896,6 +1125,7 @@ _DISPATCH = {
     "data-info":    cmd_data_info,
     "validate":     cmd_validate,
     "backtest":     cmd_backtest,
+    "portfolio":    cmd_portfolio,
     "train":        cmd_train,
     "signal":       cmd_signal,
 }

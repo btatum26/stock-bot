@@ -216,6 +216,26 @@ class TrainingPanel(QWidget):
 
         layout.addWidget(data_group)
 
+        # CPCV fold settings
+        fold_group = QGroupBox("Cross-Validation")
+        fold_form = QFormLayout(fold_group)
+
+        self.n_groups_spin = QSpinBox()
+        self.n_groups_spin.setRange(2, 50)
+        self.n_groups_spin.setValue(6)
+        self.n_groups_spin.setToolTip("Number of contiguous groups for CPCV splits")
+        self.n_groups_spin.valueChanged.connect(self._save_training_config)
+        fold_form.addRow("Groups (n):", self.n_groups_spin)
+
+        self.k_test_spin = QSpinBox()
+        self.k_test_spin.setRange(1, 49)
+        self.k_test_spin.setValue(2)
+        self.k_test_spin.setToolTip("Number of groups used as test set per fold")
+        self.k_test_spin.valueChanged.connect(self._save_training_config)
+        fold_form.addRow("Test groups (k):", self.k_test_spin)
+
+        layout.addWidget(fold_group)
+
         # Hyperparameters (rebuilt when strategy changes)
         self.params_group = QGroupBox("Hyperparameters")
         params_group_layout = QVBoxLayout(self.params_group)
@@ -309,10 +329,19 @@ class TrainingPanel(QWidget):
         self._build_param_widgets(manifest.get("hyperparameters", {}))
 
         # Sync price norm dropdown with whatever is stored in the manifest
-        saved_norm = manifest.get("training", {}).get("price_normalization", "none")
+        training = manifest.get("training", {})
+        saved_norm = training.get("price_normalization", "none")
         idx = self.price_norm_combo.findText(saved_norm)
         if idx >= 0:
             self.price_norm_combo.setCurrentIndex(idx)
+
+        # Sync CPCV fold settings
+        self.n_groups_spin.blockSignals(True)
+        self.n_groups_spin.setValue(training.get("n_groups", 6))
+        self.n_groups_spin.blockSignals(False)
+        self.k_test_spin.blockSignals(True)
+        self.k_test_spin.setValue(training.get("k_test_groups", 2))
+        self.k_test_spin.blockSignals(False)
 
     def _build_param_widgets(self, params: dict):
         while self.params_layout.count():
@@ -368,6 +397,19 @@ class TrainingPanel(QWidget):
                 out[key] = w.text()
         return out
 
+    def _save_training_config(self):
+        """Persist CPCV fold settings to the manifest's training section."""
+        name = self.strategy_combo.currentText()
+        if not name:
+            return
+        try:
+            self._engine.save_training_config(name, {
+                "n_groups": self.n_groups_spin.value(),
+                "k_test_groups": self.k_test_spin.value(),
+            })
+        except Exception as e:
+            self._log(f"Training config save failed: {e}")
+
     def _save_hparams(self):
         """Persist current widget values to manifest.json and regenerate context.py."""
         name = self.strategy_combo.currentText()
@@ -415,11 +457,14 @@ class TrainingPanel(QWidget):
             "interval": interval,
         }
 
-        # Persist price normalization choice to the manifest so the backtester
-        # applies the same transform during inference.
-        price_norm = self.price_norm_combo.currentText()
+        # Persist training settings to the manifest so the trainer and
+        # backtester use the same configuration during inference.
         try:
-            self._engine.save_training_config(strategy, {"price_normalization": price_norm})
+            self._engine.save_training_config(strategy, {
+                "price_normalization": self.price_norm_combo.currentText(),
+                "n_groups": self.n_groups_spin.value(),
+                "k_test_groups": self.k_test_spin.value(),
+            })
         except Exception as e:
             self._log(f"Warning: could not save training config: {e}")
 

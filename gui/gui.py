@@ -21,6 +21,7 @@ from .gui_components.feature_panel import FeaturePanel
 from .gui_components.plots import CandleOverlay, UnifiedPlot, VolumeOverlay
 from .gui_components.styling import setup_app_style
 from .gui_components.training_panel import TrainingPanel
+from .gui_components.portfolio_panel import PortfolioPanel
 
 from .chart.data_manager import ChartDataManager
 from .chart.feature_manager import FeatureManager
@@ -129,6 +130,9 @@ class ChartWindow(QMainWindow):
 
         self.training_panel = TrainingPanel(self.engine, self)
         self.top_tabs.addTab(self.training_panel, "Training")
+
+        self.portfolio_panel = PortfolioPanel(self.engine, self)
+        self.top_tabs.addTab(self.portfolio_panel, "Portfolio")
 
         self.showMaximized()
 
@@ -264,6 +268,8 @@ class ChartWindow(QMainWindow):
             self.backtest_panel.refresh_strategies()
         elif index == 2:
             self.training_panel.refresh_strategies()
+        elif index == 3:
+            self.portfolio_panel.refresh_strategies()
         elif index == 0:
             self._refresh_strategy_combo()
 
@@ -597,7 +603,7 @@ class ChartWindow(QMainWindow):
     # -----------------------------------------------------------------------
 
     def closeEvent(self, event):
-        for panel in (self.backtest_panel, self.training_panel):
+        for panel in (self.backtest_panel, self.training_panel, self.portfolio_panel):
             if (hasattr(panel, "_worker")
                     and panel._worker
                     and panel._worker.isRunning()):

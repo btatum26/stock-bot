@@ -21,6 +21,7 @@ It uses `ModelEngine` (the same facade the GUI uses) so strategy state is always
 | `data-info` | Show cached OHLCV tickers, intervals, and date ranges |
 | `validate <strategy>` | Import-check model.py without running data |
 | `backtest <strategy>` | Run a vectorized backtest with tearsheet output |
+| `portfolio <strategy>` | Run a multi-asset portfolio backtest with full tearsheet |
 | `train <strategy>` | Run hyperparameter optimisation (Optuna/CPCV) |
 | `signal <strategy>` | Generate current live signals |
 
@@ -322,6 +323,51 @@ uv run python research_cli.py backtest <strategy> \
 | `--start` | 1 year ago | Start date `YYYY-MM-DD` |
 | `--end` | today | End date `YYYY-MM-DD` |
 | `--capital` | `10000` | Starting capital in dollars |
+| `--debug` | off | Print full engine traceback on error |
+
+---
+
+### `portfolio <strategy>`
+
+```bash
+uv run python research_cli.py portfolio <strategy> \
+    --tickers AAPL,MSFT,NVDA,AMZN \
+    --interval 1d \
+    --start 2020-01-01 \
+    --end 2024-01-01 \
+    --capital 100000 \
+    --max-positions 10 \
+    [--no-short] \
+    [--rebalance] \
+    [--debug]
+```
+
+Runs the full multi-asset portfolio simulation (T+1 execution, 2% risk rule, signal-strength-weighted sizing) and prints a five-section tearsheet:
+
+1. **Portfolio Summary** — starting capital, final value, net P&L, and all scalar metrics
+2. **Equity Curve (ASCII)** — 10-row ASCII sketch of portfolio value over time
+3. **Per-Ticker Contribution** — sorted bar chart showing each ticker's net P&L contribution
+4. **Exit Reason Breakdown** — trade count and total P&L grouped by exit type (STOP / SIGNAL / FLIP / EVICTED / END_OF_DATA)
+5. **Trade Log** — last N trades with full entry/exit detail (use `--trades 0` for all)
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tickers` | required | Comma-separated symbols |
+| `--interval` | `1d` | Bar size: `1d`, `1h`, `4h`, `15m`, `1w` |
+| `--start` | 1 year ago | Start date `YYYY-MM-DD` |
+| `--end` | today | End date `YYYY-MM-DD` |
+| `--capital` | `100000` | Starting capital in dollars |
+| `--max-positions` | `10` | Max concurrent open positions |
+| `--risk-pct` | `0.02` | Portfolio fraction risked per trade (2% rule) |
+| `--stop-pct` | `0.05` | Fixed stop-loss as fraction of entry price |
+| `--max-pos-pct` | `0.20` | Signal-scaled max position size as fraction of portfolio |
+| `--entry-threshold` | `0.10` | Minimum \|signal\| required to open a position |
+| `--eviction-margin` | `0.15` | New signal must exceed weakest current by this to evict it |
+| `--friction` | `0.001` | One-way transaction cost fraction (0.1%) |
+| `--rebalance` | off | Enable active resizing when signal shifts by `--rebalance-delta` |
+| `--rebalance-delta` | `0.10` | Minimum \|Δsignal\| to trigger a resize (requires `--rebalance`) |
+| `--no-short` | off | Long-only mode — disables short selling |
+| `--trades` | `20` | Number of trades to show in the log (`0` = all) |
 | `--debug` | off | Print full engine traceback on error |
 
 ---

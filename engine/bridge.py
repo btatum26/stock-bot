@@ -172,7 +172,7 @@ class ModelEngine:
         Does not touch features, hyperparameters, or regenerate context.py.
         """
         manifest = self._load_manifest(strategy_name)
-        manifest["training"] = training_config
+        manifest.setdefault("training", {}).update(training_config)
         manifest_path = os.path.join(self._strategy_dir(strategy_name), "manifest.json")
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=4)
@@ -445,6 +445,113 @@ class ModelEngine:
 
         with open(os.path.join(strategy_dir, "context.py"), "w") as f:
             f.write("\n".join(lines))
+
+    def run_portfolio_backtest(
+        self,
+        strategy_name: str,
+        assets:        List[str],
+        timeframe:     dict,
+        callbacks:     dict,
+        config_dict:   dict = None,
+    ) -> dict:
+        """
+        Run a multi-asset portfolio simulation.
+
+        Fetches data and signals for all assets, then passes them through
+        PortfolioBacktester to produce a unified equity curve, position
+        heatmap data, trade log, and per-ticker P&L attribution.
+
+        Args:
+            strategy_name: Name of the strategy workspace.
+            assets:        List of ticker symbols.
+            timeframe:     Dict with 'start', 'end', 'interval'.
+            callbacks:     Standard engine callbacks dict.
+            config_dict:   Optional PortfolioConfig field overrides.
+
+        Returns:
+            Dict with keys: metrics, equity_curve, position_weights,
+            trade_log, per_ticker_contribution.
+        """
+        from engine.core.portfolio_backtester import PortfolioBacktester, PortfolioConfig
+
+        strategy_dir = self._strategy_dir(strategy_name)
+        start        = self._parse_dt(timeframe["start"])
+        end          = self._parse_dt(timeframe["end"])
+        interval     = timeframe.get("interval", "1d")
+
+        cfg_fields   = config_dict or {}
+        config       = PortfolioConfig(**{
+            k: v for k, v in cfg_fields.items()
+            if k in PortfolioConfig.__dataclass_fields__
+        })
+
+        # --- Fetch data ---------------------------------------------------
+        datasets: dict = {}
+        n = len(assets)
+        for i, ticker in enumerate(assets):
+            if callbacks["is_cancelled"]():
+                return {"cancelled": True}
+            callbacks["on_progress"](int(i / n * 35), f"Fetching {ticker}…")
+            callbacks["on_log"](f"[Portfolio] Fetching {ticker} ({interval})")
+            df = self._broker.get_data(ticker, interval, start, end)
+            if not df.empty:
+                datasets[ticker] = df
+
+        if not datasets:
+            callbacks["on_progress"](100, "No data available.")
+            return {"metrics": {}, "equity_curve": [], "position_weights": {},
+                    "trade_log": [], "per_ticker_contribution": {}}
+
+        # --- Generate signals ---------------------------------------------
+        callbacks["on_progress"](40, "Running signal batch…")
+        callbacks["on_log"]("[Portfolio] Computing signals for all tickers")
+        backtester   = LocalBacktester(strategy_dir)
+        all_signals  = backtester.run_batch(datasets)
+
+        if callbacks["is_cancelled"]():
+            return {"cancelled": True}
+
+        # --- Portfolio simulation -----------------------------------------
+        callbacks["on_progress"](60, "Simulating portfolio…")
+        callbacks["on_log"]("[Portfolio] Running portfolio simulation")
+        pb     = PortfolioBacktester()
+        result = pb.run(datasets, all_signals, config)
+
+        # --- Serialize output for the GUI thread -------------------------
+        def _downsample(s: pd.Series, max_pts: int = 1000) -> list:
+            if len(s) > max_pts:
+                s = s.iloc[:: max(1, len(s) // max_pts)]
+            return [{"t": str(idx), "v": round(float(v), 4)} for idx, v in s.items()]
+
+        eq  = result.get("equity_curve", pd.Series(dtype=float))
+        eq_out = _downsample(eq, 1500)
+
+        # position_weights: keep as raw pd.Series — heatmap builds from them
+        pw_out: dict = {}
+        for t, series in result.get("position_weights", {}).items():
+            if not series.empty:
+                pw_out[t] = series  # pd.Series; GUI downsamples as needed
+
+        # trade log
+        tdf = result.get("trade_log", pd.DataFrame())
+        if not tdf.empty:
+            tdf_copy = tdf.copy()
+            for col in ("entry_date", "exit_date"):
+                if col in tdf_copy.columns:
+                    tdf_copy[col] = tdf_copy[col].astype(str)
+            trade_log_out = tdf_copy.to_dict("records")
+        else:
+            trade_log_out = []
+
+        callbacks["on_progress"](100, "Portfolio simulation complete.")
+        return {
+            "metrics":                 result.get("metrics", {}),
+            "equity_curve":            eq_out,
+            "position_weights":        pw_out,
+            "trade_log":               trade_log_out,
+            "per_ticker_contribution": result.get("per_ticker_contribution", {}),
+            "starting_capital":        config.starting_capital,
+        }
 
     def generate_signals(self, strategy_name: str, assets: List[str], callbacks: dict) -> dict:
         strategy_dir = self._strategy_dir(strategy_name)
