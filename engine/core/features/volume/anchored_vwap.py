@@ -29,6 +29,11 @@ class AnchoredVWAP(Feature):
             "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        if params.get("normalize", "none") != "none":
+            return []
+        return [self.generate_column_name("AnchoredVWAP", params)]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         bars_back = int(params.get("anchor_bars_back", 100))
         norm_method = params.get("normalize", "none")

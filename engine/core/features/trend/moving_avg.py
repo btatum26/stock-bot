@@ -36,6 +36,19 @@ class MovingAverage(Feature):
             "type": ["SMA", "EMA"]
         }
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        # Raw MAs track price levels -> non-stationary. Any normalize method
+        # other than "none" (pct_distance, price_ratio, z_score) is stationary.
+        if params.get("normalize", "none") != "none":
+            return []
+        ma_type = params.get("type", "SMA")
+        feat_id = "MovingAverage"
+        if ma_type == "SMA" and self.__class__.__name__ == "SMA":
+            feat_id = "SMA"
+        elif ma_type == "EMA" and self.__class__.__name__ == "EMA":
+            feat_id = "EMA"
+        return [self.generate_column_name(feat_id, params)]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         period = int(params.get("period", 50))
         ma_type = params.get("type", "SMA")

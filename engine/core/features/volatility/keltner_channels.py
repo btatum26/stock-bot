@@ -36,6 +36,16 @@ class KeltnerChannels(Feature):
                          band_pair=("upper", "lower")),
         ]
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        if params.get("normalize", "none") != "none":
+            return []
+        G = self.generate_column_name
+        return [
+            G("KeltnerChannels", params, "upper"),
+            G("KeltnerChannels", params, "center"),
+            G("KeltnerChannels", params, "lower"),
+        ]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         ema_period = int(params.get("ema_period", 20))
         atr_period = int(params.get("atr_period", 10))

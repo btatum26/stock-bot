@@ -30,6 +30,16 @@ class OBV(Feature):
             OutputSchema(name="sma_20", output_type=OutputType.LINE, pane=Pane.NEW),
         ]
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        # OBV is a cumulative sum of signed volume -> strongly non-stationary.
+        # Any non-"none" normalize makes it stationary.
+        if params.get("normalize", "none") != "none":
+            return []
+        return [
+            self.generate_column_name("OBV", params),
+            self.generate_column_name("OBV", params, "sma_20"),
+        ]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         norm_method = params.get("normalize", "none")
         

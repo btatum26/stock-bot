@@ -40,6 +40,13 @@ class Supertrend(Feature):
             "multiplier": {"min": 1.0, "max": 6.0, "step": 0.5},
         }
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        # The supertrend line is a price-coupled stop level; direction is a
+        # bounded +/-1 flag. Only FFD the line.
+        if params.get("normalize", "none") != "none":
+            return []
+        return [self.generate_column_name("Supertrend", params, "line")]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         period = int(params.get("period", 10))
         multiplier = float(params.get("multiplier", 3.0))

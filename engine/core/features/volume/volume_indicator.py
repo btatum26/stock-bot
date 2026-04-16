@@ -30,6 +30,12 @@ class VolumeIndicator(Feature):
             "normalize": ["none", "z_score", "pct_distance", "price_ratio"],
         }
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        # Raw volume has secular growth -> non-stationary unless normalized.
+        if params.get("normalize", "none") != "none":
+            return []
+        return [self.generate_column_name("Volume", params)]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         norm_method = params.get("normalize", "none")
 

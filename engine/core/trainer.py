@@ -59,6 +59,11 @@ class LocalTrainer:
         # any one validation window — multiple folds mitigate this.
         "n_walk_forward_folds": 5,
         "price_normalization": "none",
+        # FFD parameters applied to features self-declared as non-stationary
+        # and to prices when price_normalization == "ffd". See MLBridge for
+        # the algorithm (Lopez de Prado fixed-window).
+        "ffd_d": 0.4,
+        "ffd_window": 10,
     }
 
     def __init__(self, strategy_dir: str):
@@ -144,13 +149,32 @@ class LocalTrainer:
         df_full, l_max = compute_all_features(raw_data, features_config)
         df_clean = df_full.iloc[l_max:].copy()
 
+        ffd_d = float(self.training_config.get("ffd_d", 0.4))
+        ffd_window = int(self.training_config.get("ffd_window", 10))
+
         # Apply price normalization before the model sees OHLCV columns.
         # Must happen after feature computation (features use raw prices) and
         # after warmup purge (so log-diff NaN drop only costs 1 row).
         price_norm = self.training_config.get("price_normalization", "none")
         if price_norm != "none":
-            df_clean = MLBridge.apply_price_normalization(df_clean, price_norm)
+            df_clean = MLBridge.apply_price_normalization(
+                df_clean, price_norm, ffd_d=ffd_d, ffd_window=ffd_window
+            )
             logger.info(f"Price normalization applied: {price_norm}")
+
+        # Apply FFD to features self-declared as non-stationary. Must happen on
+        # the contiguous df_clean (FFD is path-dependent) before any splitting
+        # or scaling. Features that inherit the default [] are untouched.
+        ffd_columns = MLBridge.collect_non_stationary_columns(features_config)
+        ffd_columns = [c for c in ffd_columns if c in df_clean.columns]
+        if ffd_columns:
+            df_clean = MLBridge.apply_ffd_to_dataframe(
+                df_clean, ffd_columns, d=ffd_d, window=ffd_window
+            )
+            logger.info(
+                f"FFD applied to {len(ffd_columns)} non-stationary feature "
+                f"columns (d={ffd_d}, window={ffd_window})."
+            )
 
         # Identify computed feature columns (everything beyond raw OHLCV)
         feature_cols = [
@@ -201,6 +225,14 @@ class LocalTrainer:
             artifacts = final["artifacts"]
         else:
             artifacts = fold_results[0]["artifacts"]
+
+        # Persist FFD metadata so prepare_inference_matrix can replay the
+        # identical transform when the backtester or signal path loads the
+        # artifacts back.
+        if ffd_columns:
+            artifacts["ffd_columns"] = ffd_columns
+            artifacts["ffd_d"] = ffd_d
+            artifacts["ffd_window"] = ffd_window
 
         # 6. Persist artifacts
         ArtifactManager.save_artifacts(self.strategy_dir, artifacts)
@@ -759,15 +791,33 @@ class LocalTrainer:
 
         features_config = self.manifest.get("features", [])
         price_norm = self.training_config.get("price_normalization", "none")
+        ffd_d = float(self.training_config.get("ffd_d", 0.4))
+        ffd_window = int(self.training_config.get("ffd_window", 10))
+
+        # Compute FFD column list once — it depends only on the manifest's
+        # features config, not per-ticker data.
+        ffd_columns_cfg = MLBridge.collect_non_stationary_columns(features_config)
 
         # 1. Per-ticker prep
         prepared: Dict[str, Dict[str, Any]] = {}
         feature_cols: Optional[List[str]] = None
+        applied_ffd_cols: List[str] = []
         for ticker, raw in datasets.items():
             df_full, l_max = compute_all_features(raw, features_config)
             df_clean = df_full.iloc[l_max:].copy()
             if price_norm != "none":
-                df_clean = MLBridge.apply_price_normalization(df_clean, price_norm)
+                df_clean = MLBridge.apply_price_normalization(
+                    df_clean, price_norm, ffd_d=ffd_d, ffd_window=ffd_window
+                )
+            # FFD must be applied per-ticker on the contiguous df (path-dependent).
+            # Skip cols that don't exist in this ticker's df (robust to config drift).
+            ticker_ffd_cols = [c for c in ffd_columns_cfg if c in df_clean.columns]
+            if ticker_ffd_cols:
+                df_clean = MLBridge.apply_ffd_to_dataframe(
+                    df_clean, ticker_ffd_cols, d=ffd_d, window=ffd_window
+                )
+                if not applied_ffd_cols:
+                    applied_ffd_cols = ticker_ffd_cols
             self._audit_features(df_clean, features_config)
 
             cols = [c for c in df_clean.columns if c.lower() not in self.OHLCV_COLS]
@@ -779,6 +829,12 @@ class LocalTrainer:
                     f"{feature_cols}, got {cols}"
                 )
             prepared[ticker] = {"df_clean": df_clean, "raw": raw}
+
+        if applied_ffd_cols:
+            logger.info(
+                f"FFD applied to {len(applied_ffd_cols)} non-stationary feature "
+                f"columns per ticker (d={ffd_d}, window={ffd_window})."
+            )
 
         if feature_cols is None:
             raise StrategyError("No tickers produced any feature data")
@@ -823,6 +879,13 @@ class LocalTrainer:
             model_class, context_class, prepared, feature_cols, hyperparams
         )
         artifacts = final["artifacts"]
+
+        # Persist FFD metadata so the backtester can replay the identical
+        # non-stationary-column transform.
+        if applied_ffd_cols:
+            artifacts["ffd_columns"] = applied_ffd_cols
+            artifacts["ffd_d"] = ffd_d
+            artifacts["ffd_window"] = ffd_window
 
         # 6. Persist
         ArtifactManager.save_artifacts(self.strategy_dir, artifacts)

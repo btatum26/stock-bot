@@ -44,6 +44,16 @@ class LinearRegressionChannel(Feature):
             "std_dev": {"min": 0.5, "max": 4.0, "step": 0.5},
         }
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        if params.get("normalize", "none") != "none":
+            return []
+        G = self.generate_column_name
+        return [
+            G("LinReg", params, "basis"),
+            G("LinReg", params, "upper"),
+            G("LinReg", params, "lower"),
+        ]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         lookback = int(params.get("lookback", 100))
         std_dev_mult = float(params.get("std_dev", 2.0))

@@ -35,6 +35,19 @@ class BollingerBands(Feature):
                          band_pair=("upper", "lower")),
         ]
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        # Upper/mid/lower bands ride price levels; width is already a ratio
+        # (stationary). Any non-"none" normalize applies a stationary transform
+        # to all three bands -> nothing to FFD.
+        if params.get("normalize", "none") != "none":
+            return []
+        G = self.generate_column_name
+        return [
+            G("BollingerBands", params, "upper"),
+            G("BollingerBands", params, "mid"),
+            G("BollingerBands", params, "lower"),
+        ]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         period = int(params.get("period", 20))
         std_dev = float(params.get("std_dev", 2.0))

@@ -223,6 +223,30 @@ class Feature(ABC):
         """
         return {}
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        """Declares which of this feature's output columns are non-stationary.
+
+        Non-stationary outputs (those that track raw price levels or accumulate
+        monotonically — moving averages, OBV, raw ATR, price-level S/R) should
+        be passed through fractional differentiation before the ML scaler so
+        the train/test distributions remain compatible.
+
+        The default is an empty list — the feature's outputs are bounded or
+        already stationary (RSI, ADX, ROC, pct_distance-normalized MA, etc.).
+        Override in subclasses that emit unbounded price-coupled series.
+
+        Args:
+            params: The parameter dict that will be passed to ``compute``.
+                Some features are stationary only under certain parameter
+                values (e.g. a MovingAverage with ``normalize="pct_distance"``
+                is stationary; one with ``normalize="none"`` is not).
+
+        Returns:
+            List of full column names (as produced by ``generate_column_name``)
+            that the trainer should route through FFD instead of MinMax.
+        """
+        return []
+
     def normalize(self, df: pd.DataFrame, series: pd.Series, method: str, window: int = 20) -> pd.Series:
         """Systematically normalizes raw indicator data for downstream machine learning.
 

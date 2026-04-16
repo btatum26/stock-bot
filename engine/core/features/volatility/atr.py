@@ -31,6 +31,14 @@ class AverageTrueRange(Feature):
             "normalize": ["none", "z_score", "pct_distance", "price_ratio"]
         }
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        # Raw ATR scales with price level -> non-stationary. Normalized variants
+        # (pct_distance, price_ratio, z_score) are stationary and pass through
+        # MinMax untouched.
+        if params.get("normalize", "none") != "none":
+            return []
+        return [self.generate_column_name("AverageTrueRange", params)]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         period = int(params.get("period", 14))
         norm_method = params.get("normalize", "none")

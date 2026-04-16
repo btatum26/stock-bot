@@ -42,6 +42,18 @@ class SupportResistance(Feature):
             OutputSchema(name="levels",                   output_type=OutputType.LEVEL,  pane=Pane.OVERLAY),
         ]
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        # Level outputs are raw prices -> non-stationary.
+        # Strength counts are bounded integers and breakout markers are sparse
+        # +/-1 flags -> both stationary, don't FFD them.
+        G = self.generate_column_name
+        return [
+            G("SupportResistance", params, "nearest_support_level"),
+            G("SupportResistance", params, "second_support_level"),
+            G("SupportResistance", params, "nearest_resistance_level"),
+            G("SupportResistance", params, "second_resistance_level"),
+        ]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         # Normalize column names: GUI capitalizes, engine uses lowercase
         df = df.rename(columns={'High': 'high', 'Low': 'low', 'Close': 'close',

@@ -439,9 +439,15 @@ class LocalBacktester:
             df_clean = df_full.iloc[l_max:].copy()
 
             # Match any price normalization applied during training
-            price_norm = self.manifest.get("training", {}).get("price_normalization", "none")
+            training_cfg = self.manifest.get("training", {})
+            price_norm = training_cfg.get("price_normalization", "none")
             if price_norm != "none":
-                df_clean = MLBridge.apply_price_normalization(df_clean, price_norm)
+                df_clean = MLBridge.apply_price_normalization(
+                    df_clean,
+                    price_norm,
+                    ffd_d=float(training_cfg.get("ffd_d", 0.4)),
+                    ffd_window=int(training_cfg.get("ffd_window", 10)),
+                )
 
             feature_ids = [f['id'] for f in features_config]
             self._audit_nans(df_clean, feature_ids)
@@ -623,7 +629,10 @@ class LocalBacktester:
                     batch_artifacts = disk_artifacts
                     logger.info("Loaded persisted artifacts for batch inference.")
 
-            price_norm = self.manifest.get("training", {}).get("price_normalization", "none")
+            training_cfg = self.manifest.get("training", {})
+            price_norm = training_cfg.get("price_normalization", "none")
+            ffd_d_cfg = float(training_cfg.get("ffd_d", 0.4))
+            ffd_window_cfg = int(training_cfg.get("ffd_window", 10))
 
             for ticker, df_raw in datasets.items():
                 logger.info(f"Processing batch execution for {ticker}")
@@ -635,7 +644,10 @@ class LocalBacktester:
 
                     # Match any price normalization applied during training
                     if price_norm != "none":
-                        df_clean = MLBridge.apply_price_normalization(df_clean, price_norm)
+                        df_clean = MLBridge.apply_price_normalization(
+                            df_clean, price_norm,
+                            ffd_d=ffd_d_cfg, ffd_window=ffd_window_cfg,
+                        )
 
                     self._audit_nans(df_clean, feature_ids)
 

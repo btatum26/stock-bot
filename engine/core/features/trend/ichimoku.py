@@ -49,6 +49,18 @@ class IchimokuCloud(Feature):
             "displacement": {"min": 10, "max": 60, "step": 1},
         }
 
+    def non_stationary_outputs(self, params: Dict[str, Any]) -> List[str]:
+        if params.get("normalize", "none") != "none":
+            return []
+        G = self.generate_column_name
+        return [
+            G("Ichimoku", params, "tenkan"),
+            G("Ichimoku", params, "kijun"),
+            G("Ichimoku", params, "chikou"),
+            G("Ichimoku", params, "senkou_a"),
+            G("Ichimoku", params, "senkou_b"),
+        ]
+
     def compute(self, df: pd.DataFrame, params: Dict[str, Any], cache: Any = None) -> FeatureResult:
         conv = int(params.get("conversion_period", 9))
         base = int(params.get("base_period", 26))
