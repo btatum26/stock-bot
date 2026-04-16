@@ -55,7 +55,7 @@ class DataBroker:
     # How old the most-recent cached bar can be before we consider the DB stale.
     # Accounts for weekends, public holidays, and timezone offsets.
     _STALENESS_WINDOW: dict = {
-        '1d':  timedelta(days=4),    # Fri close → Mon load is fine
+        '1d':  timedelta(days=4),    # Fri close -> Mon load is fine
         '1wk': timedelta(days=10),   # one full week + buffer
         '4h':  timedelta(days=2),
         '1h':  timedelta(days=2),
@@ -84,15 +84,15 @@ class DataBroker:
         Returns (None, None) when the cache is complete and fresh.
 
         Three cases:
-          1. DB empty              → fetch full requested range
-          2. Forward gap only      → fetch from last cached bar to end
-          3. Backward gap only     → fetch from requested start to first cached bar
+          1. DB empty              -> fetch full requested range
+          2. Forward gap only      -> fetch from last cached bar to end
+          3. Backward gap only     -> fetch from requested start to first cached bar
              (only applies to unlimited intervals; daily/weekly can have data
               added before the earliest cached bar)
-          4. Both gaps             → fetch the full range in one shot
+          4. Both gaps             -> fetch the full range in one shot
         """
         if not db_min or not db_max:
-            # DB is empty — fetch everything
+            # DB is empty -- fetch everything
             return start, end
 
         needs_forward  = self._needs_refresh(db_max_date, interval)
@@ -119,7 +119,7 @@ class DataBroker:
         records = df_new.to_dict('records')
 
         # SQLite limit: 999 bound parameters per statement.
-        # Each OHLCV row has 8 columns → max 124 rows per batch.
+        # Each OHLCV row has 8 columns -> max 124 rows per batch.
         _BATCH_SIZE = 999 // 8  # 124
 
         with Session(self.db.engine) as session:
@@ -143,12 +143,12 @@ class DataBroker:
         Primary interface for the strategy engine and GUI.
 
         Fetches only the bars that are not already in the local DB:
-          • If the DB is empty: fetches the full requested range.
-          • If the DB has data but is stale: fetches only the forward gap
+          - If the DB is empty: fetches the full requested range.
+          - If the DB has data but is stale: fetches only the forward gap
             (from the last cached bar to today).
-          • If earlier history is missing (daily/weekly): fetches the backward
+          - If earlier history is missing (daily/weekly): fetches the backward
             gap (from the requested start to the first cached bar).
-          • If the DB is fresh and complete: serves directly from the DB
+          - If the DB is fresh and complete: serves directly from the DB
             without touching yfinance at all.
 
         For daily/weekly intervals `start` is always overridden to _EPOCH_START
@@ -184,7 +184,7 @@ class DataBroker:
 
         # 15-Minute Rule: bypass DB (too short-lived to be worth caching)
         if interval == '15m':
-            print(f"[{ticker}] 15m requested — bypassing DB.")
+            print(f"[{ticker}] 15m requested -- bypassing DB.")
             df = self.fetcher.fetch_ohlcv(
                 ticker, interval,
                 start=start.strftime('%Y-%m-%d'),
@@ -203,7 +203,7 @@ class DataBroker:
 
         if fetch_from is not None:
             print(f"[{ticker}] Fetching {interval} gap: "
-                  f"{fetch_from.strftime('%Y-%m-%d')} → {fetch_to.strftime('%Y-%m-%d')}")
+                  f"{fetch_from.strftime('%Y-%m-%d')} -> {fetch_to.strftime('%Y-%m-%d')}")
             df_new = self.fetcher.fetch_ohlcv(
                 ticker, interval,
                 start=fetch_from.strftime('%Y-%m-%d'),
@@ -211,7 +211,7 @@ class DataBroker:
             )
             self._insert_dataframe(df_new, ticker, interval)
         else:
-            print(f"[{ticker}] {interval} cache is fresh — serving from DB.")
+            print(f"[{ticker}] {interval} cache is fresh -- serving from DB.")
 
         # Serve from DB
         with Session(self.db.engine) as session:

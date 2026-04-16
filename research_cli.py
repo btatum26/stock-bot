@@ -30,6 +30,7 @@ if _ROOT not in sys.path:
 
 from engine import ModelEngine
 from engine.core.exceptions import StrategyError, ValidationError
+from engine.core.universes import get_universe, list_universes
 
 # ── Paths (mirror gui/config.py) ──────────────────────────────────────────────
 WORKSPACE_DIR = os.path.join(_ROOT, "strategies")
@@ -91,6 +92,33 @@ def _coerce(value: str):
     except ValueError:
         pass
     return value
+
+def _resolve_tickers(args) -> List[str]:
+    """Resolve tickers from either --universe NAME or --tickers CSV.
+
+    Exactly one must be provided. Universe names are looked up in
+    engine.core.universes; unknown names raise with the full list.
+    """
+    universe = getattr(args, "universe", None)
+    tickers_csv = getattr(args, "tickers", None)
+    if universe and tickers_csv:
+        print("Error: pass either --universe or --tickers, not both.", file=sys.stderr)
+        sys.exit(1)
+    if universe:
+        try:
+            return get_universe(universe)
+        except KeyError:
+            print(
+                f"Error: unknown universe '{universe}'. "
+                f"Available: {', '.join(list_universes())}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    if tickers_csv:
+        return [t.strip().upper() for t in tickers_csv.split(",") if t.strip()]
+    print("Error: one of --universe or --tickers is required.", file=sys.stderr)
+    sys.exit(1)
+
 
 def _parse_kv_pairs(items: List[str]) -> dict:
     """Parse ['k=v', 'k2=v2'] into a typed dict."""
@@ -496,7 +524,7 @@ def cmd_train(engine: ModelEngine, args) -> None:
     The final result dict is rendered recursively -- nested dicts are indented,
     floats are shown to 4 decimal places.
     """
-    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers = _resolve_tickers(args)
     start_dt, end_dt = _resolve_dates(args.start, args.end)
     timeframe = {
         "start":    start_dt.isoformat(),
@@ -541,7 +569,7 @@ def cmd_portfolio(engine: ModelEngine, args) -> None:
       - Exit-reason breakdown
       - Full trade log (last N rows; use --trades 0 for all)
     """
-    tickers   = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers   = _resolve_tickers(args)
     start_dt, end_dt = _resolve_dates(args.start, args.end, default_lookback_days=365)
     timeframe = {
         "start":    start_dt.isoformat(),
@@ -1059,7 +1087,11 @@ commands:
     # train ───────────────────────────────────────────────────────────────────
     p = sub.add_parser("train", help="Run hyperparameter optimisation / model training")
     p.add_argument("strategy")
-    p.add_argument("--tickers",  required=True)
+    p.add_argument("--tickers",
+                   help="Comma-separated ticker symbols (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe to expand into tickers (e.g. DOW_30). "
+                        f"Available: {', '.join(list_universes())}")
     p.add_argument("--interval", default="1d")
     p.add_argument("--start",    help="Start date YYYY-MM-DD (default: 1 year ago)")
     p.add_argument("--end",      help="End date   YYYY-MM-DD (default: today)")
@@ -1069,8 +1101,11 @@ commands:
     # portfolio ───────────────────────────────────────────────────────────────
     p = sub.add_parser("portfolio", help="Run a multi-asset portfolio backtest")
     p.add_argument("strategy")
-    p.add_argument("--tickers",          required=True,
-                   help="Comma-separated ticker symbols (e.g. AAPL,MSFT,NVDA)")
+    p.add_argument("--tickers",
+                   help="Comma-separated ticker symbols (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe to expand into tickers (e.g. DOW_30). "
+                        f"Available: {', '.join(list_universes())}")
     p.add_argument("--interval",         default="1d",
                    help="Bar interval: 1d, 1h, 4h, 15m, 1w  (default: 1d)")
     p.add_argument("--start",            help="Start date YYYY-MM-DD (default: 1 year ago)")

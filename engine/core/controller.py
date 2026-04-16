@@ -18,6 +18,13 @@ from .exceptions import StrategyError, ValidationError
 from .config import config
 
 
+# Kill switch for hyperparameter search (Phase A of training).
+# When False, _handle_train skips OptimizerCore entirely and trains
+# directly with the manifest's `hyperparameters` block, ignoring any
+# `parameter_bounds`. Flip back to True to re-enable HPO.
+ENABLE_HPO = False
+
+
 def _parse_dt(value: Optional[str]) -> Optional[datetime]:
     """Convert an optional date string to a datetime, or return None."""
     if value is None:
@@ -262,6 +269,13 @@ class ApplicationController:
         has_searchable_bounds = param_bounds and any(
             isinstance(v, list) and len(v) > 1 for v in param_bounds.values()
         )
+
+        if has_searchable_bounds and not ENABLE_HPO:
+            logger.info(
+                "Parameter bounds present but HPO is disabled "
+                "(controller.ENABLE_HPO=False). Skipping Phase A."
+            )
+            has_searchable_bounds = False
 
         if has_searchable_bounds:
             # TODO: Multi-ticker HPO. For now the optimizer runs on the
