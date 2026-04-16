@@ -79,6 +79,30 @@ UNIVERSES: Dict[str, List[str]] = {
     "LEVERAGED_ETFS": [
         "TQQQ", "SQQQ", "SPXL", "SPXS", "UPRO", "TNA", "TZA", "SOXL", "SOXS", "LABU",
     ],
+    "TOP_200": [
+        # Mega cap
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "AVGO", "LLY",
+        "JPM", "V", "MA", "UNH", "XOM", "COST", "HD", "PG", "JNJ", "ABBV",
+        "WMT", "NFLX", "BAC", "CRM", "ORCL", "CVX", "MRK", "KO", "PEP", "AMD",
+        "TMO", "LIN", "ADBE", "ACN", "MCD", "CSCO", "ABT", "WFC", "PM", "GE",
+        "IBM", "NOW", "TXN", "QCOM", "ISRG", "CAT", "INTU", "AMGN", "GS", "MS",
+        "VZ", "DHR", "AMAT", "NEE", "T", "BKNG", "AXP", "PFE", "BLK", "SPGI",
+        "LOW", "RTX", "HON", "UNP", "SYK", "SCHW", "DE", "LRCX", "ELV", "PLD",
+        "BMY", "GILD", "VRTX", "REGN", "MDT", "PANW", "CB", "ADI", "KLAC", "ADP",
+        "CI", "BSX", "SBUX", "MDLZ", "TMUS", "MMC", "FI", "SO", "DUK", "CME",
+        "CL", "ICE", "MU", "PYPL", "SNPS", "CDNS", "TJX", "EQIX", "MCO", "PH",
+        # Large cap
+        "APD", "AON", "EMR", "ITW", "NOC", "GD", "SLB", "EOG", "MPC", "PSX",
+        "ORLY", "PNC", "USB", "TFC", "COF", "FDX", "CTAS", "ECL", "CMG", "NEM",
+        "SHW", "HUM", "AFL", "CARR", "TRV", "AEP", "D", "SRE", "EXC", "XEL",
+        "WM", "PCAR", "HCA", "DXCM", "MRNA", "ILMN", "KMB", "GIS", "SYY", "STZ",
+        "ROP", "IDXX", "MSCI", "FAST", "AZO", "MCHP", "ON", "FTNT", "NXPI", "CRWD",
+        "CPRT", "A", "GEHC", "ODFL", "AJG", "BKR", "DVN", "HAL", "FANG", "OXY",
+        "KDP", "YUM", "MNST", "DG", "DLTR", "ROST", "TGT", "LULU", "NKE", "LVS",
+        "AIG", "MET", "PRU", "ALL", "COIN", "GM", "F", "DAL", "UAL", "LUV",
+        "AMT", "CCI", "PSA", "SPG", "O", "WELL", "DLR", "AVB", "EQR", "MAA",
+        "PLTR", "SNOW", "DDOG", "ZS", "NET", "MDB", "SHOP", "SQ", "TTD", "MRVL",
+    ],
 }
 
 

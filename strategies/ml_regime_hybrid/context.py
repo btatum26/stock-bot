@@ -1,150 +1,47 @@
-# AUTO-GENERATED FILE. DO NOT MODIFY DIRECTLY.
+# AUTO-GENERATED. Do not edit — updated by the GUI when features change.
 from dataclasses import dataclass, field
+
 
 @dataclass(frozen=True)
 class FeaturesContext:
-    """Strictly typed mapping of strategy features to DataFrame columns."""
+    """Typed mapping from strategy features to DataFrame column names."""
     RSI_14: str = 'RSI_14'
-    """
-    Feature: RSI
-        Outputs: Primary
-        Params: {'period': 14}
-    """
-    BOLLINGERBANDS_20_2_0_UPPER: str = 'BollingerBands_20_2.0_UPPER'
-    """
-    Feature: Bollinger Bands
-        Outputs: upper
-        Params: {'period': 20, 'std_dev': 2.0}
-    """
-    BOLLINGERBANDS_20_2_0_MID: str = 'BollingerBands_20_2.0_MID'
-    """
-    Feature: Bollinger Bands
-        Outputs: mid
-        Params: {'period': 20, 'std_dev': 2.0}
-    """
-    BOLLINGERBANDS_20_2_0_LOWER: str = 'BollingerBands_20_2.0_LOWER'
-    """
-    Feature: Bollinger Bands
-        Outputs: lower
-        Params: {'period': 20, 'std_dev': 2.0}
-    """
-    BOLLINGERBANDS_20_2_0_WIDTH: str = 'BollingerBands_20_2.0_WIDTH'
-    """
-    Feature: Bollinger Bands
-        Outputs: width
-        Params: {'period': 20, 'std_dev': 2.0}
-    """
-    AVERAGETRUERANGE_14: str = 'AverageTrueRange_14'
-    """
-    Feature: ATR
-        Outputs: Primary
-        Params: {'period': 14, 'normalize': 'none'}
-    """
-    AVERAGETRUERANGE_14: str = 'Norm_AverageTrueRange_14'
-    """
-    Feature: ATR
-        Outputs: Primary
-        Params: {'period': 14, 'normalize': 'pct_distance'}
-    """
+    UPPER: str = 'BollingerBands_20_2.0_UPPER'
+    MID: str = 'BollingerBands_20_2.0_MID'
+    LOWER: str = 'BollingerBands_20_2.0_LOWER'
+    WIDTH: str = 'BollingerBands_20_2.0_WIDTH'
+    AverageTrueRange_14: str = 'AverageTrueRange_14'
+    Norm_AverageTrueRange_14: str = 'Norm_AverageTrueRange_14'
     ADX_14: str = 'ADX_14'
-    """
-    Feature: ADX
-        Outputs: Primary
-        Params: {'period': 14}
-    """
-    ADX_14_PLUS_DI: str = 'ADX_14_PLUS_DI'
-    """
-    Feature: ADX
-        Outputs: plus_di
-        Params: {'period': 14}
-    """
-    ADX_14_MINUS_DI: str = 'ADX_14_MINUS_DI'
-    """
-    Feature: ADX
-        Outputs: minus_di
-        Params: {'period': 14}
-    """
-    MOVINGAVERAGE_20_EMA: str = 'MovingAverage_20_EMA'
-    """
-    Feature: Moving Average
-        Outputs: Primary
-        Params: {'period': 20, 'type': 'EMA', 'normalize': 'none'}
-    """
-    MOVINGAVERAGE_50_EMA: str = 'MovingAverage_50_EMA'
-    """
-    Feature: Moving Average
-        Outputs: Primary
-        Params: {'period': 50, 'type': 'EMA', 'normalize': 'none'}
-    """
-    MOVINGAVERAGE_200_EMA: str = 'MovingAverage_200_EMA'
-    """
-    Feature: Moving Average
-        Outputs: Primary
-        Params: {'period': 200, 'type': 'EMA', 'normalize': 'none'}
-    """
-    MOVINGAVERAGE_50_EMA: str = 'Norm_MovingAverage_50_EMA'
-    """
-    Feature: Moving Average
-        Outputs: Primary
-        Params: {'period': 50, 'type': 'EMA', 'normalize': 'pct_distance'}
-    """
-    YEARLYCYCLE_SIN: str = 'YearlyCycle_SIN'
-    """
-    Feature: Yearly Cycle
-        Outputs: sin
-        Params: {}
-    """
-    YEARLYCYCLE_COS: str = 'YearlyCycle_COS'
-    """
-    Feature: Yearly Cycle
-        Outputs: cos
-        Params: {}
-    """
-    SUPPORTRESISTANCE_0_02_Bill_Williams_1_0_0_015_35_NEAREST_SUPPORT_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_NEAREST_SUPPORT_LEVEL'
-    """
-    Feature: Support & Resistance
-        Outputs: nearest_support_level
-        Params: {'method': 'Bill Williams', 'threshold_pct': 0.015, 'window': 35, 'clustering_pct': 0.02, 'min_strength': 1.0}
-    """
-    SUPPORTRESISTANCE_0_02_Bill_Williams_1_0_0_015_35_SECOND_SUPPORT_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_SECOND_SUPPORT_LEVEL'
-    """
-    Feature: Support & Resistance
-        Outputs: second_support_level
-        Params: {'method': 'Bill Williams', 'threshold_pct': 0.015, 'window': 35, 'clustering_pct': 0.02, 'min_strength': 1.0}
-    """
-    SUPPORTRESISTANCE_0_02_Bill_Williams_1_0_0_015_35_NEAREST_RESISTANCE_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_NEAREST_RESISTANCE_LEVEL'
-    """
-    Feature: Support & Resistance
-        Outputs: nearest_resistance_level
-        Params: {'method': 'Bill Williams', 'threshold_pct': 0.015, 'window': 35, 'clustering_pct': 0.02, 'min_strength': 1.0}
-    """
-    SUPPORTRESISTANCE_0_02_Bill_Williams_1_0_0_015_35_SECOND_RESISTANCE_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_SECOND_RESISTANCE_LEVEL'
-    """
-    Feature: Support & Resistance
-        Outputs: second_resistance_level
-        Params: {'method': 'Bill Williams', 'threshold_pct': 0.015, 'window': 35, 'clustering_pct': 0.02, 'min_strength': 1.0}
-    """
-    SUPPORTRESISTANCE_0_02_Bill_Williams_1_0_0_015_35_BREAKOUT_RESISTANCE: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_BREAKOUT_RESISTANCE'
-    """
-    Feature: Support & Resistance
-        Outputs: breakout_resistance
-        Params: {'method': 'Bill Williams', 'threshold_pct': 0.015, 'window': 35, 'clustering_pct': 0.02, 'min_strength': 1.0}
-    """
-    SUPPORTRESISTANCE_0_02_Bill_Williams_1_0_0_015_35_BREAKDOWN_SUPPORT: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_BREAKDOWN_SUPPORT'
-    """
-    Feature: Support & Resistance
-        Outputs: breakdown_support
-        Params: {'method': 'Bill Williams', 'threshold_pct': 0.015, 'window': 35, 'clustering_pct': 0.02, 'min_strength': 1.0}
-    """
+    PLUS_DI: str = 'ADX_14_PLUS_DI'
+    MINUS_DI: str = 'ADX_14_MINUS_DI'
+    MovingAverage_20_EMA: str = 'MovingAverage_20_EMA'
+    MovingAverage_50_EMA: str = 'MovingAverage_50_EMA'
+    MovingAverage_200_EMA: str = 'MovingAverage_200_EMA'
+    Norm_MovingAverage_50_EMA: str = 'Norm_MovingAverage_50_EMA'
+    SIN: str = 'YearlyCycle_SIN'
+    COS: str = 'YearlyCycle_COS'
+    NEAREST_SUPPORT_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_NEAREST_SUPPORT_LEVEL'
+    SECOND_SUPPORT_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_SECOND_SUPPORT_LEVEL'
+    NEAREST_RESISTANCE_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_NEAREST_RESISTANCE_LEVEL'
+    SECOND_RESISTANCE_LEVEL: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_SECOND_RESISTANCE_LEVEL'
+    BREAKOUT_RESISTANCE: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_BREAKOUT_RESISTANCE'
+    BREAKDOWN_SUPPORT: str = 'SupportResistance_0.02_Bill Williams_1.0_0.015_35_BREAKDOWN_SUPPORT'
+    RSI_7: str = 'RSI_7'
+    ROC_20: str = 'ROC_20'
+    Norm_MovingAverage_252_SMA: str = 'Norm_MovingAverage_252_SMA'
+    OBV: str = 'OBV'
+    SMA_20: str = 'OBV_SMA_20'
+
 
 @dataclass(frozen=True)
 class ParamsContext:
-    """Strictly typed strategy hyperparameters defined in manifest.json."""
-    stop_loss: float = 0.07
-    n_estimators: int = 300
-    max_depth: int = 4
-    learning_rate: float = 0.05
-    min_child_weight: int = 50
+    """Typed strategy hyperparameters."""
+    stop_loss: float = 0.05
+    n_estimators: int = 200
+    max_depth: int = 3
+    learning_rate: float = 0.04
+    min_child_weight: int = 10
     subsample: float = 0.7
     colsample_bytree: float = 0.7
     reg_lambda: float = 2.0
@@ -153,20 +50,21 @@ class ParamsContext:
     lookforward: int = 20
     max_drawdown_threshold: float = 0.05
     min_profit_threshold: float = 0.03
-    low_vol_threshold: float = 0.25
+    low_vol_threshold: float = 0.3
     high_vol_threshold: float = 0.75
-    atr_lookback: int = 252
+    atr_lookback: int = 246
     vol_expansion_limit: float = 0.1
-    entry_quality_threshold: float = 0.35
-    min_adx_entry: int = 20
-    max_rsi_entry: int = 75
-    max_bb_pct_b_entry: float = 0.95
+    entry_quality_threshold: float = 0.34999999999999964
+    min_adx_entry: int = 15
+    max_rsi_entry: int = 72
+    max_bb_pct_b_entry: float = 0.8
     resistance_buffer_pct: float = 0.02
-    trailing_stop_pct: float = 0.1
-    max_hold_days: int = 60
+    trailing_stop_pct: float = 0.05
+    max_hold_days: int = 200
+
 
 @dataclass(frozen=True)
 class Context:
-    """Master strategy context object."""
+    """Master context object."""
     features: FeaturesContext = field(default_factory=FeaturesContext)
-    params: ParamsContext = field(default_factory=ParamsContext)
+    params:   ParamsContext   = field(default_factory=ParamsContext)

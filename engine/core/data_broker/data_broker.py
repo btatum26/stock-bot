@@ -163,6 +163,10 @@ class DataBroker:
         if end is None:
             end = datetime.utcnow()
 
+        # Preserve the originally requested window for DB filtering
+        requested_start = start
+        requested_end   = end
+
         # Clamp intraday start dates to Yahoo Finance's hard per-interval limits
         max_lookback = self._YF_MAX_HISTORY.get(interval)
         if max_lookback is not None:
@@ -172,8 +176,10 @@ class DataBroker:
                 earliest_allowed = end - max_lookback
                 if start < earliest_allowed:
                     start = earliest_allowed
+            requested_start = start  # intraday: clamped start is the effective requested start
         else:
-            # Daily / weekly: always store full history
+            # Daily / weekly: always store full history in the DB,
+            # but retain the original requested_start for filtering the query.
             start = self._EPOCH_START
 
         # 15-Minute Rule: bypass DB (too short-lived to be worth caching)
@@ -213,9 +219,10 @@ class DataBroker:
                 OHLCV.ticker   == ticker,
                 OHLCV.interval == interval,
             ]
-            if max_lookback is not None:
-                # Intraday: filter to the clamped window
-                where_clauses.append(OHLCV.timestamp >= start)
+            if requested_start is not None:
+                where_clauses.append(OHLCV.timestamp >= requested_start)
+            if requested_end is not None:
+                where_clauses.append(OHLCV.timestamp <= requested_end)
 
             stmt     = select(OHLCV).where(*where_clauses).order_by(OHLCV.timestamp.asc())
             df_final = pd.read_sql(stmt, session.bind)

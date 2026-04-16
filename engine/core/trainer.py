@@ -709,6 +709,9 @@ class LocalTrainer:
                 f"  Groups:       {split_info['n_groups']} "
                 f"(k={split_info['k_test_groups']})"
             )
+            if "n_tickers" in split_info:
+                print(f"  Tickers:      {split_info['n_tickers']}")
+                print(f"  Total Rows:   {split_info['n_rows']}")
 
         # Metrics table
         is_cpcv = isinstance(next(iter(val_metrics.values()), None), dict)
@@ -793,17 +796,15 @@ class LocalTrainer:
             else self.manifest.get("hyperparameters", {})
         )
 
-        # 3. Generate walk-forward date folds
-        n_folds = int(self.training_config.get("n_walk_forward_folds", 5))
-        folds = self._split_walk_forward_by_date(prepared, n_folds)
+        # 3. Generate CPCV date-group folds
+        date_folds, all_dates, n_groups = self._split_cpcv_by_date(prepared)
 
         # 4. Train and evaluate each fold
         fold_results: List[Dict[str, Any]] = []
-        for fold_idx, (train_start, train_end, val_start, val_end) in enumerate(folds):
+        for fold_idx, (train_dates, val_dates) in enumerate(date_folds):
             logger.info(
-                f"Fold {fold_idx + 1}/{len(folds)}: "
-                f"train [{train_start.date()} -> {train_end.date()}], "
-                f"val [{val_start.date()} -> {val_end.date()}]"
+                f"Fold {fold_idx + 1}/{len(date_folds)}: "
+                f"train={len(train_dates)} dates, val={len(val_dates)} dates"
             )
             result = self._train_fold_multi(
                 model_class=model_class,
@@ -811,15 +812,13 @@ class LocalTrainer:
                 prepared=prepared,
                 feature_cols=feature_cols,
                 hyperparams=hyperparams,
-                train_start=train_start,
-                train_end=train_end,
-                val_start=val_start,
-                val_end=val_end,
+                train_dates=train_dates,
+                val_dates=val_dates,
             )
             fold_results.append(result)
 
         # 5. Retrain on full pooled dataset for final artifacts
-        logger.info("Walk-forward validation complete. Retraining on full pooled dataset.")
+        logger.info("CPCV validation complete. Retraining on full pooled dataset.")
         final = self._train_final_multi(
             model_class, context_class, prepared, feature_cols, hyperparams
         )
@@ -829,8 +828,10 @@ class LocalTrainer:
         ArtifactManager.save_artifacts(self.strategy_dir, artifacts)
 
         # 7. Build report
+        k_test = self.training_config["k_test_groups"]
         results = self._build_multi_results(
-            fold_results, folds, prepared, hyperparams
+            fold_results, date_folds, prepared, hyperparams,
+            n_groups=n_groups, k_test_groups=k_test,
         )
         feature_analysis = artifacts.get("feature_analysis")
         if feature_analysis:
@@ -838,62 +839,88 @@ class LocalTrainer:
             results["feature_analysis"] = feature_analysis
         return results
 
-    def _split_walk_forward_by_date(
+    def _split_cpcv_by_date(
         self,
         prepared: Dict[str, Dict[str, Any]],
-        n_folds: int,
-    ) -> List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]]:
-        """Expanding walk-forward splits across the union of all dates.
+    ) -> Tuple[List[Tuple[set, set]], pd.DatetimeIndex, int]:
+        """CPCV splits across the union of all ticker dates.
 
-        Each fold trains on ``[first_date, cutoff_k]`` and validates on
-        ``[cutoff_k + 1 day, cutoff_{k+1}]``. Because splits are keyed
-        to calendar dates (not row positions), same-date bars from
-        different tickers cannot straddle the train/val boundary and
-        cross-sectional leakage is avoided.
+        Partitions the sorted union of dates into N contiguous groups,
+        then generates all C(N, k) combinations where k groups form the
+        test set. Applies embargo by removing a percentage of date-groups
+        adjacent to each test block from training.
 
-        The initial 40% of dates is reserved for the first training
-        window; the remaining 60% is divided into ``n_folds`` equal
-        validation windows.
-
-        TODO: Panel-aware CPCV. Walk-forward is robust but less
-        sample-efficient than CPCV with proper date-group purging.
+        Returns:
+            Tuple of (folds, all_dates, n_groups) where each fold is a
+            ``(train_dates_set, val_dates_set)`` pair.
         """
+        import itertools
+
         all_dates = pd.DatetimeIndex([])
         for p in prepared.values():
             idx = pd.DatetimeIndex(p["df_clean"].index)
             all_dates = all_dates.union(idx)
         all_dates = all_dates.sort_values()
 
-        n = len(all_dates)
-        if n < n_folds * 2:
+        n_groups = self.training_config["n_groups"]
+        k_test = self.training_config["k_test_groups"]
+        embargo_pct = self.training_config.get("embargo_pct", 0.01)
+
+        if n_groups < 2:
+            raise StrategyError(f"n_groups must be >= 2, got {n_groups}")
+        if k_test < 1 or k_test >= n_groups:
             raise StrategyError(
-                f"Not enough dates ({n}) for {n_folds} walk-forward folds"
+                f"k_test_groups must be in [1, {n_groups - 1}], got {k_test}"
             )
 
-        initial_train_end_idx = max(int(n * 0.4), 1)
-        val_pool_size = n - initial_train_end_idx
-        val_fold_size = max(val_pool_size // n_folds, 1)
+        n_dates = len(all_dates)
+        if n_dates < n_groups:
+            raise StrategyError(
+                f"Not enough dates ({n_dates}) for {n_groups} groups"
+            )
 
-        folds: List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]] = []
-        train_start = all_dates[0]
-        for k in range(n_folds):
-            train_end_idx = initial_train_end_idx + k * val_fold_size - 1
-            if train_end_idx < 0:
-                train_end_idx = 0
-            val_start_idx = train_end_idx + 1
-            if val_start_idx >= n:
-                break
-            val_end_idx = min(val_start_idx + val_fold_size - 1, n - 1)
-            folds.append((
-                train_start,
-                all_dates[train_end_idx],
-                all_dates[val_start_idx],
-                all_dates[val_end_idx],
-            ))
+        # Partition dates into N contiguous groups
+        date_groups = np.array_split(np.arange(n_dates), n_groups)
+        embargo_size = max(1, int(n_dates * embargo_pct))
+
+        n_folds = len(list(itertools.combinations(range(n_groups), k_test)))
+        logger.info(
+            f"CPCV (multi-ticker): {n_groups} groups, k={k_test} -> "
+            f"{n_folds} folds (embargo={embargo_pct:.1%})"
+        )
+
+        folds: List[Tuple[set, set]] = []
+        for test_group_ids in itertools.combinations(range(n_groups), k_test):
+            test_indices = np.concatenate([date_groups[g] for g in test_group_ids])
+            train_group_ids = [g for g in range(n_groups) if g not in test_group_ids]
+            train_indices = np.concatenate([date_groups[g] for g in train_group_ids])
+
+            # Apply embargo: remove train dates near test block boundaries
+            if embargo_pct > 0:
+                test_set = set(test_indices)
+                # Find contiguous test blocks
+                sorted_test = np.sort(test_indices)
+                breaks = np.where(np.diff(sorted_test) > 1)[0]
+                starts = np.concatenate([[0], breaks + 1])
+                ends = np.concatenate([breaks, [len(sorted_test) - 1]])
+                blocks = [
+                    (int(sorted_test[s]), int(sorted_test[e]))
+                    for s, e in zip(starts, ends)
+                ]
+                embargo_mask = np.zeros(len(train_indices), dtype=bool)
+                for _, block_end in blocks:
+                    embargo_mask |= (train_indices > block_end) & (
+                        train_indices <= block_end + embargo_size
+                    )
+                train_indices = train_indices[~embargo_mask]
+
+            train_dates = set(all_dates[train_indices])
+            val_dates = set(all_dates[test_indices])
+            folds.append((train_dates, val_dates))
 
         if not folds:
-            raise StrategyError("Walk-forward splitter produced zero folds")
-        return folds
+            raise StrategyError("CPCV splitter produced zero folds")
+        return folds, all_dates, n_groups
 
     def _train_fold_multi(
         self,
@@ -902,12 +929,10 @@ class LocalTrainer:
         prepared: Dict[str, Dict[str, Any]],
         feature_cols: List[str],
         hyperparams: Dict[str, Any],
-        train_start: pd.Timestamp,
-        train_end: pd.Timestamp,
-        val_start: pd.Timestamp,
-        val_end: pd.Timestamp,
+        train_dates: set,
+        val_dates: set,
     ) -> Dict[str, Any]:
-        """Trains on one walk-forward fold.
+        """Trains on one CPCV fold.
 
         Per-ticker label construction, pooled fit, per-ticker evaluation.
         """
@@ -923,8 +948,8 @@ class LocalTrainer:
 
         for ticker, p in prepared.items():
             df = p["df_clean"]
-            train_mask = (df.index >= train_start) & (df.index <= train_end)
-            val_mask = (df.index >= val_start) & (df.index <= val_end)
+            train_mask = df.index.isin(train_dates)
+            val_mask = df.index.isin(val_dates)
             df_train_t = df.loc[train_mask]
             df_val_t = df.loc[val_mask]
 
@@ -1105,11 +1130,13 @@ class LocalTrainer:
     def _build_multi_results(
         self,
         fold_results: List[Dict[str, Any]],
-        folds: List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
+        folds: List[Tuple[set, set]],
         prepared: Dict[str, Dict[str, Any]],
         hyperparams: Dict[str, Any],
+        n_groups: int = 6,
+        k_test_groups: int = 2,
     ) -> Dict[str, Any]:
-        """Aggregates walk-forward fold results into the final report."""
+        """Aggregates CPCV fold results into the final report."""
         skip_keys = {"equity_curve", "portfolio", "bh_portfolio", "trade_log"}
 
         train_scalar = self._aggregate_fold_metrics(
@@ -1121,18 +1148,13 @@ class LocalTrainer:
 
         n_rows = sum(len(p["df_clean"]) for p in prepared.values())
         split_info = {
-            "method": "walk_forward",
+            "method": "cpcv",
             "n_folds": len(folds),
+            "n_groups": n_groups,
+            "k_test_groups": k_test_groups,
             "n_tickers": len(prepared),
             "n_rows": n_rows,
             "tickers": list(prepared.keys()),
-            "fold_ranges": [
-                {
-                    "train": [str(f[0]), str(f[1])],
-                    "val": [str(f[2]), str(f[3])],
-                }
-                for f in folds
-            ],
         }
 
         self._print_training_summary(train_scalar, val_scalar, split_info)

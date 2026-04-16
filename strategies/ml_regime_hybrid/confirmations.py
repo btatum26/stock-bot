@@ -84,6 +84,8 @@ def check_not_at_resistance(
     buf = float(params.get("resistance_buffer_pct", 0.02))
     if np.isnan(nearest_resistance) or nearest_resistance <= close:
         return True  # no overhead resistance -> pass
+    if close == 0:
+        return True
     dist = (nearest_resistance - close) / close
     return dist > buf
 
