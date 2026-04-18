@@ -112,7 +112,10 @@ features/
 ├── trend/          # Moving averages, ADX
 ├── volatility/     # Bollinger Bands, ATR, Keltner Channels
 ├── volume/         # VWAP, OBV, Volume Z-Score
-└── levels/         # Support/Resistance
+├── levels/         # Support/Resistance
+├── macro/          # FRED series, VIX term structure
+├── options/        # Options-chain implied signals (live only)
+└── alternative/    # Insider flow (EDGAR), Google Trends
 ```
 
 Place your file in the appropriate subdirectory. If you're making a new category,
@@ -588,6 +591,109 @@ class CCI(Feature):
 - [x] `compute()` never mutates `df`
 - [x] `compute()` returns a `FeatureResult`
 - [x] Works with `normalize` param for ML compatibility
+
+---
+
+## External Data Features
+
+The `macro/`, `options/`, and `alternative/` categories fetch data from external sources
+rather than computing from the OHLCV DataFrame passed to `compute()`. They follow the
+same interface contract as all other features, with a few additional patterns.
+
+### Macro features (`macro/`)
+
+**FRED series** — `NFCI`, `ANFCI`, `HYSpread`, `T10Y2Y`, `T10Y3M`, `VIXCLS`, `ICSA`, `DFF`
+
+Each FRED feature fetches the series via `DataFetcher.fetch_macro_data()` using the
+date range of the price df's index, then forward-fills onto that index (weekly releases
+fill daily gaps). Each produces three output columns:
+
+| Suffix | Description | Stationary? |
+|---|---|---|
+| `_LEVEL` | Raw FRED value | Non-stationary — auto-routed through FFD by trainer |
+| `_ROC5` | 5-day percent change | Stationary |
+| `_ZSCORE` | 252-day rolling z-score (min 63 obs) | Stationary |
+
+The `non_stationary_outputs()` method declares `_LEVEL` so the ML trainer automatically
+routes it through fractional differentiation before scaling.
+
+**VIX term structure** — `VIXTermStructure`
+
+Fetches `^VIX` and `^VIX3M` from yfinance and computes `VIX / VIX3M`. Values below
+0.90 indicate deep contango (calm); above 1.00 indicates backwardation (stress). Outputs
+the raw ratio and its 252-day z-score.
+
+Example manifest entry (no parameters needed):
+
+```json
+{"id": "NFCI"}
+{"id": "T10Y2Y"}
+{"id": "VIXTermStructure"}
+```
+
+### Options features (`options/`)
+
+**`OptionsFlow`** — requires `"ticker"` in params.
+
+Fetches the live options chain from yfinance and computes:
+
+| Output | Description |
+|---|---|
+| `_PCR` | Put/call volume ratio (30-day expiry chain) |
+| `_PCR_CHG5` | 5-day change in P/C ratio |
+| `_IV_SKEW` | OTM put IV (≈25-delta) minus ATM IV |
+| `_IV_TS` | Short-term ATM IV divided by medium-term ATM IV (~30d / ~90d) |
+| `_VOL_UNUSUAL` | Total options volume divided by its 20-day rolling median |
+
+**Important**: yfinance only exposes current options snapshots, not historical data.
+All output columns return NaN for historical backtesting rows. A live value is stamped
+at the last row only when the price df ends within 5 calendar days of today. These
+features are useful for signal generation, not backtesting.
+
+```json
+{"id": "OptionsFlow", "params": {"ticker": "AAPL"}}
+```
+
+### Alternative features (`alternative/`)
+
+**`InsiderFlow`** — requires `"ticker"` in params. Data cached in `data/insider.db`.
+
+Fetches SEC EDGAR Form 4 filings for the ticker via the EDGAR submissions API,
+filters to open-market purchases by officers and directors (excluding pure 10%-owner
+filers), and caches results in a SQLite database. Subsequent runs are served from cache.
+
+Outputs a rolling purchase count over `window` calendar days and a sparse cluster
+marker where the count reaches `min_cluster` (default 3).
+
+```json
+{"id": "InsiderFlow", "params": {"ticker": "AAPL", "window": 14, "min_cluster": 3}}
+```
+
+**`GoogleTrends`** — requires `"ticker"` in params. Requires `uv add pytrends`.
+
+Fetches weekly Google Search interest, forward-fills to the daily index, and outputs
+the interest as a ratio to its rolling `median_window`-week median plus a z-score.
+Rate-limited by Google (~1 req/sec); best suited for weekly-refreshed signal universes.
+
+```json
+{"id": "GoogleTrends", "params": {"ticker": "AAPL", "median_window": 8}}
+```
+
+### The `ticker` parameter pattern
+
+Three features (`OptionsFlow`, `InsiderFlow`, `GoogleTrends`) require the ticker symbol
+as an explicit `params` entry because `compute()` only receives the price DataFrame
+(which carries no ticker metadata). This mirrors the `TickerComparison` feature's
+`compare_ticker` param.
+
+Note that including `ticker` in params affects the generated column name:
+
+```
+InsiderFlow_AAPL_14_3_PURCHASE_COUNT
+```
+
+This is expected behaviour — it makes multi-ticker comparisons in a single strategy
+unambiguous.
 
 ---
 
