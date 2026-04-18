@@ -1,3 +1,4 @@
+import os
 import pytest
 import pandas as pd
 import numpy as np
@@ -73,51 +74,78 @@ def test_fetch_error_handling(fetcher):
             fetcher.fetch_ohlcv("AAPL", "1d", "2023-01-01", "2023-01-02")
 
 
-@patch('engine.core.config.config.FRED_API_KEY', 'dummy_test_key')
+@patch('engine.core.data_broker.fetcher.config.FRED_API_KEY', 'dummy_test_key')
 def test_fetch_macro_data_success(fetcher):
-    # Setup the mock JSON response matching the official FRED API structure
     mock_response = MagicMock()
     mock_response.json.return_value = {
         "observations": [
             {"date": "2023-01-01", "value": "4.5"},
             {"date": "2023-02-01", "value": "4.6"},
-            {"date": "2023-03-01", "value": "."}  # Simulate FRED's missing data character
+            {"date": "2023-03-01", "value": "."}  # FRED's missing-data sentinel
         ]
     }
     mock_response.raise_for_status.return_value = None
 
-    # Patch the fetcher's cached session to return our mock
-    with patch.object(fetcher.session, 'get', return_value=mock_response) as mock_get:
+    with patch('engine.core.data_broker.fetcher.requests.get', return_value=mock_response) as mock_get:
         df = fetcher.fetch_macro_data("UNRATE", "2023-01-01", "2023-03-01")
 
-        # Assert the HTTP request was built correctly
         mock_get.assert_called_once()
         args, kwargs = mock_get.call_args
         assert args[0] == "https://api.stlouisfed.org/fred/series/observations"
         assert kwargs['params']['series_id'] == "UNRATE"
         assert kwargs['params']['api_key'] == "dummy_test_key"
         assert kwargs['params']['file_type'] == "json"
+        assert kwargs['params']['observation_start'] == "2023-01-01"
+        assert kwargs['params']['observation_end'] == "2023-03-01"
 
-        # Assert the resulting DataFrame is processed correctly
-        # The "." value should be coerced to NaN and dropped by _sanitize_dataframe, 
-        # so we expect exactly 2 rows back, not 3.
-        assert not df.empty
+        # The "." row should coerce to NaN and be dropped by _sanitize_dataframe.
         assert len(df) == 2
-        
-        # Check column mappings and data types
         assert "indicator_name" in df.columns
         assert df["indicator_name"].iloc[0] == "UNRATE"
         assert df["value"].iloc[0] == 4.5
         assert isinstance(df["value"].iloc[0], (float, np.floating))
         assert isinstance(df["date"].iloc[0], pd.Timestamp)
 
-@patch('engine.core.config.config.FRED_API_KEY', None)
+
+@patch('engine.core.data_broker.fetcher.config.FRED_API_KEY', None)
 def test_fetch_macro_data_missing_key(fetcher):
-    # If the key is missing, it should immediately return an empty DataFrame 
-    # without ever attempting an HTTP request.
-    with patch.object(fetcher.session, 'get') as mock_get:
+    with patch('engine.core.data_broker.fetcher.requests.get') as mock_get:
         df = fetcher.fetch_macro_data("UNRATE", "2023-01-01", "2023-03-01")
-        
         mock_get.assert_not_called()
         assert df.empty
-        
+
+
+@patch('engine.core.data_broker.fetcher.config.FRED_API_KEY', 'dummy_test_key')
+def test_fetch_macro_data_empty_observations(fetcher):
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"observations": []}
+    mock_response.raise_for_status.return_value = None
+    with patch('engine.core.data_broker.fetcher.requests.get', return_value=mock_response):
+        df = fetcher.fetch_macro_data("UNRATE", "2023-01-01", "2023-03-01")
+        assert df.empty
+
+
+@patch('engine.core.data_broker.fetcher.config.FRED_API_KEY', 'dummy_test_key')
+def test_fetch_macro_data_http_error(fetcher):
+    import requests as _requests
+    mock_response = MagicMock()
+    mock_response.raise_for_status.side_effect = _requests.HTTPError("400 Bad Request")
+    with patch('engine.core.data_broker.fetcher.requests.get', return_value=mock_response):
+        df = fetcher.fetch_macro_data("UNRATE", "2023-01-01", "2023-03-01")
+        # Errors are swallowed and converted to empty DataFrames (by design).
+        assert df.empty
+
+
+@pytest.mark.skipif(
+    os.getenv("RUN_LIVE_FRED") != "1" or not os.getenv("FRED_API_KEY"),
+    reason="Live FRED test. Set RUN_LIVE_FRED=1 and FRED_API_KEY to enable.",
+)
+def test_fetch_macro_data_live(fetcher):
+    """Hits the real FRED API. Gated by RUN_LIVE_FRED=1 to keep CI offline-safe."""
+    df = fetcher.fetch_macro_data("UNRATE", "2024-01-01", "2024-06-01")
+    assert not df.empty, "Live FRED call returned no rows — check FRED_API_KEY format (32 lowercase hex chars)."
+    assert set(df.columns) >= {"date", "value", "indicator_name"}
+    assert df["indicator_name"].iloc[0] == "UNRATE"
+    assert pd.api.types.is_datetime64_any_dtype(df["date"])
+    assert pd.api.types.is_numeric_dtype(df["value"])
+

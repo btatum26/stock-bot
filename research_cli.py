@@ -11,12 +11,15 @@ import argparse
 import importlib.util
 import json
 import logging
+import math
 import os
 import sys
 import traceback
 import warnings
 from datetime import datetime, timedelta
 from typing import List, Optional
+
+import numpy as np
 
 # Suppress numpy/pandas NaN and divide-by-zero RuntimeWarnings -- they are
 # expected during feature computation on sparse data and clutter the output.
@@ -955,6 +958,489 @@ def cmd_validate(engine: ModelEngine, args) -> None:
     print(f"\n  PASS  {args.strategy} is valid\n")
 
 
+# ── Phase 0 diagnostic helpers ────────────────────────────────────────────────
+
+def _expand_param_values(bounds, n_steps: int = 7) -> list:
+    """Expand a parameter_bounds entry into a list of values to test."""
+    if not isinstance(bounds, list) or len(bounds) == 0:
+        return []
+    if len(bounds) == 2:
+        try:
+            lo, hi = float(bounds[0]), float(bounds[1])
+            return list(np.linspace(lo, hi, n_steps))
+        except (TypeError, ValueError):
+            pass
+    return [v for v in bounds]  # discrete list
+
+
+def _ascii_bar(value: float, lo: float, hi: float, width: int = 20, positive: bool = True) -> str:
+    """Return an ASCII bar proportional to value in [lo, hi]."""
+    span = hi - lo if hi != lo else 1.0
+    fill = int((value - lo) / span * width)
+    fill = max(0, min(width, fill))
+    char = "#" if positive else "-"
+    return char * fill + "." * (width - fill)
+
+
+def cmd_trial_counts(engine: ModelEngine, args) -> None:
+    """Show or set trial counts for strategies.
+
+    Without --set, lists all recorded trial counts.
+    With --set STRATEGY --backtest N --train N, manually set counts (backfill).
+    """
+    from engine.core.diagnostics.trial_counter import get_all, set_counts
+
+    if args.set:
+        bc = getattr(args, "backtest_count", 0) or 0
+        tc = getattr(args, "train_count",    0) or 0
+        set_counts(args.set, bc, tc)
+        print(f"[+] Set {args.set}: backtest={bc}, train={tc}, total={bc+tc}")
+        return
+
+    rows = get_all()
+    if not rows:
+        print("  No trial counts recorded yet.")
+        print("  Counts are incremented automatically on each backtest/train run.")
+        print("  Use --set STRATEGY --backtest N --train N to backfill manually.")
+        return
+
+    _header(f"Trial Counts  ({len(rows)} strategies)")
+    print(f"\n  {'Strategy':<30}  {'Backtests':>10}  {'Trains':>8}  {'Total':>7}  {'Last Run'}")
+    print(f"  {'-'*72}")
+    for r in rows:
+        last = str(r['last_run_at'] or '')[:19]
+        print(
+            f"  {r['strategy_name']:<30}  {r['backtest_count']:>10}  "
+            f"{r['train_count']:>8}  {r['total_count']:>7}  {last}"
+        )
+
+
+def cmd_sensitivity(engine: ModelEngine, args) -> None:
+    """Sweep each hyperparameter across its bounds and report Sharpe sensitivity.
+
+    For each param (top-3 by range width, or --params), runs 7 backtest steps
+    holding other params at default values. Smooth plateau curves = real signal;
+    spiky non-monotonic curves = fitted noise.
+    """
+    from engine.core.backtester import LocalBacktester, Tearsheet
+
+    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    start_dt, end_dt = _resolve_dates(args.start, args.end)
+    n_steps = getattr(args, "steps", 7)
+
+    strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
+    manifest_path = os.path.join(strat_path, "manifest.json")
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except Exception as e:
+        print(f"  Error reading manifest: {e}")
+        sys.exit(1)
+
+    param_bounds = manifest.get("parameter_bounds", {})
+    if not param_bounds:
+        print("  No parameter_bounds defined in manifest — nothing to sweep.")
+        return
+
+    if args.params:
+        requested = [p.strip() for p in args.params.split(",")]
+        param_bounds = {k: v for k, v in param_bounds.items() if k in requested}
+    else:
+        def _range_width(b):
+            if isinstance(b, list) and len(b) == 2:
+                try:
+                    return abs(float(b[1]) - float(b[0]))
+                except (TypeError, ValueError):
+                    return 0.0
+            return 0.0
+        sorted_pb = sorted(param_bounds.items(), key=lambda x: -_range_width(x[1]))
+        param_bounds = dict(sorted_pb[:3])
+
+    broker = engine._broker
+    datasets = {}
+    for ticker in tickers:
+        df = broker.get_data(ticker, args.interval, start_dt, end_dt)
+        if not df.empty:
+            datasets[ticker] = df
+    if not datasets:
+        print("  No data available for requested tickers.")
+        return
+
+    default_params = manifest.get("hyperparameters", {})
+    backtester = LocalBacktester(strat_path)
+
+    _header(
+        f"SENSITIVITY  |  {args.strategy}  |  {', '.join(tickers)}  |  {args.interval}\n"
+        f"{start_dt.date()} -> {end_dt.date()}"
+    )
+
+    for param_name, bounds in param_bounds.items():
+        steps = _expand_param_values(bounds, n_steps)
+        if not steps:
+            continue
+
+        all_sharpes = []
+        for step_val in steps:
+            params = {**default_params, param_name: step_val}
+            fold_sharpes = []
+            for ticker, df in datasets.items():
+                try:
+                    sigs = backtester.run(df, params=params)
+                    m = Tearsheet.calculate_metrics(df, sigs)
+                    s = m.get("Sharpe Ratio", float("nan"))
+                    if math.isfinite(s):
+                        fold_sharpes.append(s)
+                except Exception:
+                    pass
+            all_sharpes.append(float(np.nanmean(fold_sharpes)) if fold_sharpes else float("nan"))
+
+        finite = [s for s in all_sharpes if math.isfinite(s)]
+        lo_s = min(finite) if finite else 0.0
+        hi_s = max(finite) if finite else 1.0
+        default_val = default_params.get(param_name)
+
+        _section(f"Parameter: {param_name}")
+        print(f"    {'Value':>12}  {'Sharpe':>8}  Chart")
+        print(f"    {'-'*52}")
+        for step_val, sharpe in zip(steps, all_sharpes):
+            marker = " *" if (
+                default_val is not None and
+                abs(float(step_val) - float(default_val)) <= abs(hi_s - lo_s) / (n_steps * 2 + 1)
+            ) else "  "
+            if math.isfinite(sharpe):
+                bar = _ascii_bar(sharpe, lo_s, hi_s, width=20, positive=(sharpe >= 0))
+                print(f"    {step_val:>12.4f}  {sharpe:>8.3f}  {bar}{marker}")
+            else:
+                print(f"    {step_val:>12.4f}  {'N/A':>8}  {marker}")
+
+
+def cmd_signal_stability(engine: ModelEngine, args) -> None:
+    """Test whether strategy signals are stable across time periods.
+
+    Generates signals on the full available history (default 2010-present),
+    then regenerates on three subsets: 2010-2015, 2015-2020, 2020-2025.
+    Correlation < 0.7 between full-period and subset signals indicates the
+    strategy is learning period-specific noise rather than persistent patterns.
+    """
+    from engine.core.backtester import LocalBacktester
+
+    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
+    backtester = LocalBacktester(strat_path)
+    broker = engine._broker
+
+    PERIODS = [
+        ("2010-01-01", "2015-01-01", "2010-2015"),
+        ("2015-01-01", "2020-01-01", "2015-2020"),
+        ("2020-01-01", "2025-01-01", "2020-2025"),
+    ]
+
+    _header(
+        f"SIGNAL STABILITY  |  {args.strategy}  |  {', '.join(tickers)}  |  {args.interval}"
+    )
+
+    for ticker in tickers:
+        _section(f"Ticker: {ticker}")
+
+        full_start = datetime(2010, 1, 1)
+        full_end   = datetime.now()
+        df_full = broker.get_data(ticker, args.interval, full_start, full_end)
+        if df_full.empty:
+            print(f"    No data available for {ticker}")
+            continue
+
+        try:
+            signals_full = backtester.run(df_full)
+        except Exception as e:
+            print(f"    Error generating full-period signals: {e}")
+            continue
+
+        print(f"\n    Full period: {df_full.index[0].date()} -> {df_full.index[-1].date()}"
+              f"  ({len(signals_full)} bars)")
+        print(f"\n    {'Period':<14}  {'Corr':>8}  {'Bars':>6}  Status")
+        print(f"    {'-'*50}")
+
+        for p_start, p_end, label in PERIODS:
+            ps = datetime.strptime(p_start, "%Y-%m-%d")
+            pe = datetime.strptime(p_end,   "%Y-%m-%d")
+            df_p = broker.get_data(ticker, args.interval, ps, pe)
+            if df_p.empty or len(df_p) < 50:
+                print(f"    {label:<14}  {'N/A':>8}  {len(df_p):>6}  Insufficient data")
+                continue
+            try:
+                sigs_p = backtester.run(df_p)
+            except Exception as e:
+                print(f"    {label:<14}  {'ERR':>8}  {len(df_p):>6}  {e}")
+                continue
+
+            overlap = signals_full.index.intersection(sigs_p.index)
+            if len(overlap) < 20:
+                print(f"    {label:<14}  {'N/A':>8}  {len(overlap):>6}  Too few overlapping bars")
+                continue
+
+            corr = float(signals_full.loc[overlap].corr(sigs_p.loc[overlap]))
+            if math.isnan(corr):
+                status = "N/A"
+                corr_s = "   N/A"
+            elif corr >= 0.7:
+                status = "PASS (stable)"
+            else:
+                status = "FAIL (unstable)"
+            corr_s = f"{corr:>8.3f}" if math.isfinite(corr) else "   N/A"
+            print(f"    {label:<14}  {corr_s}  {len(overlap):>6}  {status}")
+
+
+def cmd_diagnose(engine: ModelEngine, args) -> None:
+    """Run all Phase 0 diagnostics and print a one-page strategy report.
+
+    Runs: backtest (with DSR + trial count), fold distribution (from saved
+    diagnostics.json from last training run), signal stability across periods.
+    Use --sensitivity to also run the parameter sweep (slow: ~21 backtests).
+
+    Verdict criteria (Bailey & Lopez de Prado):
+      PASS: DSR > 0.5, positive folds > 70%, signal stability corr > 0.7
+      FAIL on 2+ criteria -> retire the strategy.
+    """
+    from engine.core.backtester import LocalBacktester, Tearsheet
+    from engine.core.diagnostics.trial_counter import get_total_trials
+
+    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    start_dt, end_dt = _resolve_dates(args.start, args.end, default_lookback_days=1825)
+    strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
+
+    manifest_path = os.path.join(strat_path, "manifest.json")
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except Exception as e:
+        print(f"  Error reading manifest: {e}")
+        sys.exit(1)
+
+    n_trials   = get_total_trials(args.strategy)
+    broker     = engine._broker
+    backtester = LocalBacktester(strat_path)
+
+    _header(
+        f"PHASE 0 DIAGNOSTICS  |  {args.strategy}\n"
+        f"{', '.join(tickers)}  |  {args.interval}  |  "
+        f"{start_dt.date()} -> {end_dt.date()}"
+    )
+
+    # ── 1. Backtest with DSR ─────────────────────────────────────────────────
+    _section("Core Metrics  (n_trials=" + str(n_trials) + ")")
+    ticker_metrics: dict = {}
+    for ticker in tickers:
+        df = broker.get_data(ticker, args.interval, start_dt, end_dt)
+        if df.empty:
+            print(f"    {ticker}: no data")
+            continue
+        try:
+            sigs = backtester.run(df)
+            m    = Tearsheet.calculate_metrics(df, sigs, n_trials=n_trials)
+            ticker_metrics[ticker] = m
+        except Exception as e:
+            print(f"    {ticker}: ERROR — {e}")
+
+    if ticker_metrics:
+        show_keys = [
+            ("Sharpe Ratio",          "Sharpe Ratio (annualised)"),
+            ("Deflated Sharpe Ratio", "Deflated Sharpe Ratio"),
+            ("Total Return (%)",      "Total Return (%)"),
+            ("CAGR (%)",              "CAGR (%)"),
+            ("Max Drawdown (%)",      "Max Drawdown (%)"),
+            ("Sortino Ratio",         "Sortino Ratio"),
+            ("Total Trades",          "Total Trades"),
+        ]
+        for ticker, m in ticker_metrics.items():
+            print(f"\n    Ticker: {ticker}")
+            for key, label in show_keys:
+                val = m.get(key)
+                if val is None:
+                    continue
+                if isinstance(val, float):
+                    print(f"      {label:<36}  {val:.4f}")
+                else:
+                    print(f"      {label:<36}  {val}")
+
+    # ── 2. Fold distribution  (from diagnostics.json) ────────────────────────
+    diag_path = os.path.join(strat_path, "diagnostics.json")
+    fold_diag: dict = {}
+    if os.path.exists(diag_path):
+        try:
+            with open(diag_path) as f:
+                fold_diag = json.load(f)
+        except Exception:
+            pass
+
+    _section("Fold Distribution  (from last training run)")
+    if not fold_diag:
+        print("    No diagnostics.json found — run `train` first to generate fold metrics.")
+    else:
+        fold_sharpes = fold_diag.get("fold_sharpes", [])
+        frac_pos     = fold_diag.get("fraction_positive_folds", float("nan"))
+        frac_half    = fold_diag.get("fraction_above_half_folds", float("nan"))
+        spearman     = fold_diag.get("spearman_is_oos", float("nan"))
+        last_trained = fold_diag.get("last_trained", "?")
+
+        n_folds = len(fold_sharpes)
+        finite  = [s for s in fold_sharpes if isinstance(s, float) and math.isfinite(s)]
+        n_pos   = sum(1 for s in finite if s > 0)
+        n_half  = sum(1 for s in finite if s > 0.5)
+
+        print(f"    Last trained       : {str(last_trained)[:19]}")
+        print(f"    Folds              : {n_folds}")
+        print(f"    OOS Sharpes        : {[round(s, 2) if isinstance(s, float) and math.isfinite(s) else 'nan' for s in fold_sharpes]}")
+        print(f"    Positive folds     : {n_pos}/{n_folds}  ({frac_pos*100:.1f}%)")
+        print(f"    Folds SR > 0.5     : {n_half}/{n_folds}  ({frac_half*100:.1f}%)")
+        sp_s = f"{spearman:.3f}" if isinstance(spearman, float) and math.isfinite(spearman) else "N/A"
+        print(f"    IS/OOS Spearman r  : {sp_s}")
+
+    # ── 3. Signal stability ──────────────────────────────────────────────────
+    PERIODS = [
+        ("2010-01-01", "2015-01-01", "2010-2015"),
+        ("2015-01-01", "2020-01-01", "2015-2020"),
+        ("2020-01-01", "2025-01-01", "2020-2025"),
+    ]
+
+    _section("Signal Stability")
+    stability_results: list = []
+    for ticker in tickers[:1]:  # test on first ticker to keep it fast
+        df_full = broker.get_data(ticker, args.interval, datetime(2010, 1, 1), datetime.now())
+        if df_full.empty:
+            print(f"    No full-period data for {ticker}")
+            continue
+        try:
+            sigs_full = backtester.run(df_full)
+        except Exception as e:
+            print(f"    Could not generate signals: {e}")
+            continue
+
+        print(f"    Ticker: {ticker}")
+        print(f"    {'Period':<14}  {'Corr':>8}  {'Bars':>6}  Status")
+        print(f"    {'-'*48}")
+        for p_start, p_end, label in PERIODS:
+            ps = datetime.strptime(p_start, "%Y-%m-%d")
+            pe = datetime.strptime(p_end,   "%Y-%m-%d")
+            df_p = broker.get_data(ticker, args.interval, ps, pe)
+            if df_p.empty or len(df_p) < 50:
+                print(f"    {label:<14}  {'N/A':>8}  {len(df_p):>6}  Insufficient data")
+                stability_results.append(float("nan"))
+                continue
+            try:
+                sigs_p = backtester.run(df_p)
+            except Exception:
+                stability_results.append(float("nan"))
+                continue
+            overlap = sigs_full.index.intersection(sigs_p.index)
+            if len(overlap) < 20:
+                stability_results.append(float("nan"))
+                continue
+            corr = float(sigs_full.loc[overlap].corr(sigs_p.loc[overlap]))
+            stability_results.append(corr)
+            corr_s = f"{corr:>8.3f}" if math.isfinite(corr) else "   N/A"
+            status = ("PASS (stable)" if math.isfinite(corr) and corr >= 0.7
+                      else "FAIL (unstable)" if math.isfinite(corr)
+                      else "N/A")
+            print(f"    {label:<14}  {corr_s}  {len(overlap):>6}  {status}")
+
+    # ── 4. Optional sensitivity ─────────────────────────────────────────────
+    if getattr(args, "sensitivity", False):
+        _section("Parameter Sensitivity")
+        param_bounds = manifest.get("parameter_bounds", {})
+        if not param_bounds:
+            print("    No parameter_bounds defined — skipping.")
+        else:
+            def _rw(b):
+                if isinstance(b, list) and len(b) == 2:
+                    try:
+                        return abs(float(b[1]) - float(b[0]))
+                    except (TypeError, ValueError):
+                        return 0.0
+                return 0.0
+            top3 = dict(sorted(param_bounds.items(), key=lambda x: -_rw(x[1]))[:3])
+            default_params = manifest.get("hyperparameters", {})
+            df_sweep = broker.get_data(tickers[0], args.interval, start_dt, end_dt)
+            if not df_sweep.empty:
+                for param_name, bounds in top3.items():
+                    steps = _expand_param_values(bounds, 7)
+                    if not steps:
+                        continue
+                    sharpes = []
+                    for sv in steps:
+                        try:
+                            sigs = backtester.run(df_sweep, params={**default_params, param_name: sv})
+                            m    = Tearsheet.calculate_metrics(df_sweep, sigs)
+                            sharpes.append(m.get("Sharpe Ratio", float("nan")))
+                        except Exception:
+                            sharpes.append(float("nan"))
+                    finite = [s for s in sharpes if math.isfinite(s)]
+                    lo_s, hi_s = (min(finite), max(finite)) if finite else (0.0, 1.0)
+                    print(f"\n    {param_name}:")
+                    print(f"    {'Value':>10}  {'Sharpe':>8}  Chart")
+                    for sv, sh in zip(steps, sharpes):
+                        if math.isfinite(sh):
+                            bar = _ascii_bar(sh, lo_s, hi_s, width=16, positive=(sh >= 0))
+                            print(f"    {sv:>10.4f}  {sh:>8.3f}  {bar}")
+                        else:
+                            print(f"    {sv:>10.4f}  {'N/A':>8}")
+
+    # ── 5. Verdict ──────────────────────────────────────────────────────────
+    _section("Verdict")
+
+    # Gather pass/fail for each criterion
+    failures = []
+
+    # DSR criterion
+    dsr_vals = [m.get("Deflated Sharpe Ratio") for m in ticker_metrics.values()
+                if isinstance(m.get("Deflated Sharpe Ratio"), float)
+                and math.isfinite(m.get("Deflated Sharpe Ratio", float("nan")))]
+    if dsr_vals:
+        avg_dsr = float(np.mean(dsr_vals))
+        dsr_pass = avg_dsr > 0.5
+        dsr_s = f"{avg_dsr:.4f}"
+    else:
+        dsr_pass = None
+        dsr_s = "N/A"
+    print(f"    {'DSR > 0.5':<32}  {'PASS' if dsr_pass else ('FAIL' if dsr_pass is False else 'N/A'):<6}  {dsr_s}")
+    if dsr_pass is False:
+        failures.append("DSR")
+
+    # Positive folds criterion
+    if fold_diag:
+        frac_pos = fold_diag.get("fraction_positive_folds", float("nan"))
+        if math.isfinite(frac_pos):
+            folds_pass = frac_pos >= 0.70
+            print(f"    {'Positive folds > 70%':<32}  {'PASS' if folds_pass else 'FAIL':<6}  {frac_pos*100:.1f}%")
+            if not folds_pass:
+                failures.append("fold distribution")
+        else:
+            print(f"    {'Positive folds > 70%':<32}  {'N/A':<6}")
+    else:
+        print(f"    {'Positive folds > 70%':<32}  N/A    (train first)")
+
+    # Signal stability criterion
+    finite_corrs = [c for c in stability_results if math.isfinite(c)]
+    if finite_corrs:
+        n_stable = sum(1 for c in finite_corrs if c >= 0.7)
+        stability_pass = n_stable == len(finite_corrs)
+        stability_s = f"{n_stable}/{len(finite_corrs)} periods stable"
+        print(f"    {'Signal stability corr > 0.7':<32}  {'PASS' if stability_pass else 'FAIL':<6}  {stability_s}")
+        if not stability_pass:
+            failures.append("signal stability")
+    else:
+        print(f"    {'Signal stability corr > 0.7':<32}  N/A")
+
+    print()
+    if len(failures) >= 2:
+        print(f"  RECOMMENDATION: RETIRE  (fails on {len(failures)}: {', '.join(failures)})")
+        print("  Trying to fix a fitted-noise strategy tends to produce more sophisticated fitted noise.")
+    elif len(failures) == 1:
+        print(f"  RECOMMENDATION: INVESTIGATE  (1 failure: {failures[0]})")
+    else:
+        print("  RECOMMENDATION: KEEP  (passes all measured criteria)")
+    print()
+
+
 # ── Shared renderer for nested result dicts ───────────────────────────────────
 
 def _render_result_dict(data: dict, indent: int = 4) -> None:
@@ -1143,26 +1629,73 @@ commands:
     p.add_argument("--tickers", required=True,
                    help="Comma-separated tickers")
 
+    # trial-counts ────────────────────────────────────────────────────────────
+    p = sub.add_parser("trial-counts", help="Show or set strategy trial counts")
+    p.add_argument("--set",            metavar="STRATEGY",
+                   help="Strategy name to set counts for (backfill)")
+    p.add_argument("--backtest-count", type=int, default=0, dest="backtest_count",
+                   help="Number of backtest runs to record (default: 0)")
+    p.add_argument("--train-count",    type=int, default=0, dest="train_count",
+                   help="Number of training runs to record (default: 0)")
+
+    # sensitivity ─────────────────────────────────────────────────────────────
+    p = sub.add_parser("sensitivity",
+                       help="Sweep hyperparameters across bounds and report Sharpe curves")
+    p.add_argument("strategy")
+    p.add_argument("--tickers",  required=True,
+                   help="Comma-separated tickers for the sweep backtests")
+    p.add_argument("--interval", default="1d")
+    p.add_argument("--start",    help="Start date YYYY-MM-DD (default: 5 years ago)")
+    p.add_argument("--end",      help="End date   YYYY-MM-DD (default: today)")
+    p.add_argument("--params",   metavar="p1,p2",
+                   help="Comma-separated parameter names to sweep (default: top-3 by range width)")
+    p.add_argument("--steps",    type=int, default=7,
+                   help="Number of steps per parameter (default: 7)")
+
+    # signal-stability ────────────────────────────────────────────────────────
+    p = sub.add_parser("signal-stability",
+                       help="Test signal correlation across time periods (2010-2025)")
+    p.add_argument("strategy")
+    p.add_argument("--tickers",  required=True,
+                   help="Comma-separated tickers")
+    p.add_argument("--interval", default="1d")
+
+    # diagnose ────────────────────────────────────────────────────────────────
+    p = sub.add_parser("diagnose",
+                       help="Run all Phase 0 diagnostics and print a one-page report")
+    p.add_argument("strategy")
+    p.add_argument("--tickers",     required=True,
+                   help="Comma-separated tickers")
+    p.add_argument("--interval",    default="1d")
+    p.add_argument("--start",       help="Start date YYYY-MM-DD (default: 5 years ago)")
+    p.add_argument("--end",         help="End date   YYYY-MM-DD (default: today)")
+    p.add_argument("--sensitivity", action="store_true",
+                   help="Include parameter sensitivity sweep (adds ~21 backtests)")
+
     return parser
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 _DISPATCH = {
-    "list":         cmd_list,
-    "features":     cmd_features,
-    "inspect":      cmd_inspect,
-    "init":         cmd_init,
-    "edit":         cmd_edit,
-    "sync":         cmd_sync,
-    "show-context": cmd_show_context,
-    "show-model":   cmd_show_model,
-    "data-info":    cmd_data_info,
-    "validate":     cmd_validate,
-    "backtest":     cmd_backtest,
-    "portfolio":    cmd_portfolio,
-    "train":        cmd_train,
-    "signal":       cmd_signal,
+    "list":             cmd_list,
+    "features":         cmd_features,
+    "inspect":          cmd_inspect,
+    "init":             cmd_init,
+    "edit":             cmd_edit,
+    "sync":             cmd_sync,
+    "show-context":     cmd_show_context,
+    "show-model":       cmd_show_model,
+    "data-info":        cmd_data_info,
+    "validate":         cmd_validate,
+    "backtest":         cmd_backtest,
+    "portfolio":        cmd_portfolio,
+    "train":            cmd_train,
+    "signal":           cmd_signal,
+    "trial-counts":     cmd_trial_counts,
+    "sensitivity":      cmd_sensitivity,
+    "signal-stability": cmd_signal_stability,
+    "diagnose":         cmd_diagnose,
 }
 
 

@@ -176,11 +176,20 @@ class ApplicationController:
         else:
             raise ValidationError(f"Unsupported execution mode: {mode}")
 
-    def _handle_backtest(self, strat_path: str, assets: List[str], interval: str, 
+    def _handle_backtest(self, strat_path: str, assets: List[str], interval: str,
                          start: Optional[str], end: Optional[str], multi_asset_mode: MultiAssetMode):
         """Executes the backtesting pipeline using batch processing."""
         if len(assets) > 1 and multi_asset_mode == MultiAssetMode.PORTFOLIO:
             raise NotImplementedError("PORTFOLIO mode is not yet supported.")
+
+        strategy_name = os.path.basename(strat_path)
+        n_trials = 1
+        try:
+            from .diagnostics.trial_counter import increment, get_total_trials
+            increment(strategy_name, "backtest")
+            n_trials = get_total_trials(strategy_name)
+        except Exception:
+            pass
 
         # Fetch all data upfront
         datasets = {}
@@ -208,7 +217,7 @@ class ApplicationController:
                     all_metrics[ticker] = {"error": "Execution failed during batch run"}
                     continue
                     
-                metrics = Tearsheet.calculate_metrics(datasets[ticker], signals)
+                metrics = Tearsheet.calculate_metrics(datasets[ticker], signals, n_trials=n_trials)
                 # Store a copy without bulky time-series objects for the CLI summary
                 scalar_metrics = {k: v for k, v in metrics.items()
                                   if k not in ("equity_curve", "portfolio", "bh_portfolio", "trade_log")}
@@ -237,6 +246,12 @@ class ApplicationController:
         """
         if not assets:
             raise ValidationError("No assets provided for training")
+
+        try:
+            from .diagnostics.trial_counter import increment
+            increment(os.path.basename(strat_path), "train")
+        except Exception:
+            pass
 
         # Fetch data for every requested ticker
         datasets: Dict[str, pd.DataFrame] = {}

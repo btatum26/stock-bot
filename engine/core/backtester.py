@@ -37,6 +37,7 @@ class Tearsheet:
         friction: float = 0.001,
         starting_capital: float = 10_000.0,
         entry_threshold: float = 0.2,
+        n_trials: int = 1,
     ) -> Dict[str, Any]:
         """
         Calculates performance metrics using a T+1 execution model.
@@ -121,6 +122,13 @@ class Tearsheet:
         volatility = strategy_returns.std() * np.sqrt(252)
         sharpe = (strategy_returns.mean() * 252) / volatility if volatility > 0 else 0.0
 
+        dsr_val = float("nan")
+        try:
+            from .diagnostics.dsr import compute_dsr
+            dsr_val = compute_dsr(strategy_returns.dropna(), n_trials)
+        except Exception:
+            pass
+
         downside = strategy_returns[strategy_returns < 0]
         downside_vol = downside.std() * np.sqrt(252) if len(downside) > 0 else 0.0
         sortino = (strategy_returns.mean() * 252) / downside_vol if downside_vol > 0 else 0.0
@@ -168,6 +176,7 @@ class Tearsheet:
             "CAGR (%)":            round(cagr, 2),
             # Risk / quality
             "Sharpe Ratio":        round(sharpe, 2),
+            "Deflated Sharpe Ratio": round(dsr_val, 4) if np.isfinite(dsr_val) else float("nan"),
             "Sortino Ratio":       round(sortino, 2),
             "Calmar Ratio":        round(calmar, 2),
             "Max Drawdown (%)":    round(max_drawdown, 2),

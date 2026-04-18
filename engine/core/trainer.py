@@ -598,6 +598,73 @@ class LocalTrainer:
     # Results aggregation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _compute_fold_diagnostics(
+        train_metrics_list: List[Dict[str, Any]],
+        val_metrics_list: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Compute fold-level Sharpe distribution and IS/OOS rank correlation.
+
+        Returns a dict with:
+          fold_sharpes            : OOS Sharpe per fold (raw list)
+          fold_train_sharpes      : IS  Sharpe per fold (raw list)
+          fraction_positive_folds : fraction of OOS folds with Sharpe > 0
+          fraction_above_half_folds : fraction with Sharpe > 0.5
+          spearman_is_oos         : Spearman rank corr between IS and OOS Sharpes
+        """
+        from scipy.stats import spearmanr
+
+        def _safe_sharpe(m: Dict[str, Any]) -> float:
+            v = m.get("Sharpe Ratio")
+            if isinstance(v, (int, float)) and math.isfinite(v):
+                return float(v)
+            return float("nan")
+
+        val_sharpes   = [_safe_sharpe(m) for m in val_metrics_list]
+        train_sharpes = [_safe_sharpe(m) for m in train_metrics_list]
+
+        finite_val = [s for s in val_sharpes if math.isfinite(s)]
+        n = len(finite_val)
+        if n == 0:
+            return {}
+
+        fraction_positive  = sum(1 for s in finite_val if s > 0.0) / n
+        fraction_above_half = sum(1 for s in finite_val if s > 0.5) / n
+
+        spearman = float("nan")
+        finite_pairs = [
+            (t, v) for t, v in zip(train_sharpes, val_sharpes)
+            if math.isfinite(t) and math.isfinite(v)
+        ]
+        if len(finite_pairs) >= 3:
+            try:
+                r, _ = spearmanr(
+                    [p[0] for p in finite_pairs],
+                    [p[1] for p in finite_pairs],
+                )
+                spearman = float(r)
+            except Exception:
+                pass
+
+        return {
+            "fold_sharpes":             val_sharpes,
+            "fold_train_sharpes":       train_sharpes,
+            "fraction_positive_folds":  round(fraction_positive, 4),
+            "fraction_above_half_folds": round(fraction_above_half, 4),
+            "spearman_is_oos":          round(spearman, 4) if math.isfinite(spearman) else float("nan"),
+        }
+
+    def _save_diagnostics(self, diagnostics: Dict[str, Any]) -> None:
+        """Persist fold diagnostics to strategies/<name>/diagnostics.json."""
+        from datetime import datetime, timezone
+        path = os.path.join(self.strategy_dir, "diagnostics.json")
+        try:
+            data = {**diagnostics, "last_trained": datetime.now(timezone.utc).isoformat()}
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save diagnostics.json: {e}")
+
     def _build_results(
         self,
         fold_results: List[Dict[str, Any]],
@@ -657,6 +724,20 @@ class LocalTrainer:
                 "n_folds": len(folds),
                 "n_groups": self.training_config["n_groups"],
                 "k_test_groups": self.training_config["k_test_groups"],
+            }
+            fold_diagnostics = self._compute_fold_diagnostics(
+                [r["train_metrics"] for r in fold_results],
+                [r["val_metrics"]   for r in fold_results],
+            )
+            if fold_diagnostics:
+                self._save_diagnostics(fold_diagnostics)
+            self._print_training_summary(train_scalar, val_scalar, split_info)
+            return {
+                "train_metrics":    train_scalar,
+                "val_metrics":      val_scalar,
+                "split_info":       split_info,
+                "params":           hyperparams,
+                "fold_diagnostics": fold_diagnostics,
             }
 
         self._print_training_summary(train_scalar, val_scalar, split_info)
@@ -1220,13 +1301,21 @@ class LocalTrainer:
             "tickers": list(prepared.keys()),
         }
 
+        fold_diagnostics = self._compute_fold_diagnostics(
+            [r["train_metrics"] for r in fold_results],
+            [r["val_metrics"]   for r in fold_results],
+        )
+        if fold_diagnostics:
+            self._save_diagnostics(fold_diagnostics)
+
         self._print_training_summary(train_scalar, val_scalar, split_info)
 
         return {
-            "train_metrics": train_scalar,
-            "val_metrics": val_scalar,
-            "split_info": split_info,
-            "params": hyperparams,
+            "train_metrics":    train_scalar,
+            "val_metrics":      val_scalar,
+            "split_info":       split_info,
+            "params":           hyperparams,
+            "fold_diagnostics": fold_diagnostics,
         }
 
     # ------------------------------------------------------------------
