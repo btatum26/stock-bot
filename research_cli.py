@@ -958,6 +958,208 @@ def cmd_validate(engine: ModelEngine, args) -> None:
     print(f"\n  PASS  {args.strategy} is valid\n")
 
 
+# ── Phase 1: IC analysis commands ────────────────────────────────────────────
+
+def cmd_ic(engine: ModelEngine, args) -> None:
+    """
+    Unconditional IC analysis for a strategy's signals.
+
+    Fetches data for each ticker, runs generate_signals(), then computes
+    cross-sectional rank IC at horizons [1, 5, 10, 20, 60]. Prints the
+    standardized IC report and applies the go/no-go gate (IC >= 0.02,
+    IC-IR >= 0.3 at the 5-day horizon).
+
+    Use --save to write the report to strategies/<name>/ic_report.txt.
+    """
+    from engine.core.backtester import LocalBacktester
+    from engine.core.analytics import ICAnalyzer, render_ic_report
+
+    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    start_dt, end_dt = _resolve_dates(args.start, args.end, default_lookback_days=1825)
+    strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
+    backtester = LocalBacktester(strat_path)
+    broker = engine._broker
+
+    _header(
+        f"IC ANALYSIS  |  {args.strategy}  |  {', '.join(tickers[:5])}"
+        + (f" (+{len(tickers)-5} more)" if len(tickers) > 5 else "")
+        + f"  |  {args.interval}\n"
+        f"{start_dt.date()} -> {end_dt.date()}"
+    )
+
+    print("\n  Generating signals...")
+    signals, prices = {}, {}
+    for ticker in tickers:
+        df = broker.get_data(ticker, args.interval, start_dt, end_dt)
+        if df.empty:
+            print(f"  Warning: no data for {ticker}, skipping.")
+            continue
+        try:
+            sigs = backtester.run(df)
+            signals[ticker] = sigs
+            prices[ticker] = df
+        except Exception as e:
+            print(f"  Warning: signal generation failed for {ticker}: {e}")
+
+    if not signals:
+        print("\n  No signals generated. Aborting.")
+        return
+
+    print(f"  {len(signals)} tickers with signals. Computing IC...\n")
+
+    from engine.core.diagnostics.trial_counter import get_total_trials
+    n_trials = get_total_trials(args.strategy)
+
+    analyzer = ICAnalyzer(
+        signals=signals,
+        prices=prices,
+        signal_name=args.strategy,
+        n_trials=n_trials,
+    )
+    result = analyzer.run(horizons=args.horizons or [1, 5, 10, 20, 60])
+    report_text = render_ic_report(result)
+
+    print(report_text)
+
+    if args.save:
+        out_path = os.path.join(WORKSPACE_DIR, args.strategy, "ic_report.txt")
+        with open(out_path, "w") as f:
+            f.write(report_text + "\n")
+        print(f"\n  Report saved to: {out_path}")
+
+    if result.passes_gate:
+        ic5 = result.mean_ic.get(5, float("nan"))
+        ir5 = result.ic_ir.get(5, float("nan"))
+        print(f"\n  GATE: PASS  (IC={ic5:.4f}, IC-IR={ir5:.4f})")
+        print("  Next step: run `ic-surface` with macro dimensions to test regime sensitivity.")
+    else:
+        print("\n  GATE: FAIL  — signal does not have detectable edge. Discard.")
+
+
+def cmd_ic_surface(engine: ModelEngine, args) -> None:
+    """
+    Conditional IC surface analysis across macro regime dimensions.
+
+    Fetches signals (same as the `ic` command), then fetches the specified
+    macro series (FRED or yfinance), bins each macro variable into quantile
+    regimes, and computes IC per regime cell.
+
+    Macro dimensions are specified as SERIES_ID:SOURCE[:N_BINS]:
+      '^VIX:yf:5'       CBOE VIX index, 5 quantile bins
+      'T10Y2Y:fred:3'   10Y-2Y yield spread from FRED, 3 bins
+      '^TNX:yf'         10Y Treasury yield, default 4 bins
+
+    Prints both the unconditional IC report and the conditional surface.
+    Use --save to write reports to the strategy directory.
+    """
+    from engine.core.backtester import LocalBacktester
+    from engine.core.analytics import (
+        ICAnalyzer, ConditionalIC,
+        MacroFetcher, parse_macro_spec,
+        render_ic_report, render_conditional_ic_report,
+    )
+
+    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    start_dt, end_dt = _resolve_dates(args.start, args.end, default_lookback_days=1825)
+    strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
+    backtester = LocalBacktester(strat_path)
+    broker = engine._broker
+
+    # Parse macro specs
+    try:
+        macro_specs = [parse_macro_spec(s) for s in args.macro]
+    except ValueError as e:
+        print(f"\n  Error in --macro spec: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    _header(
+        f"IC SURFACE  |  {args.strategy}  |  {', '.join(tickers[:5])}"
+        + (f" (+{len(tickers)-5} more)" if len(tickers) > 5 else "")
+        + f"  |  {args.interval}\n"
+        f"Macro: {', '.join(s.series_id for s in macro_specs)}"
+    )
+
+    print("\n  Generating signals...")
+    signals, prices = {}, {}
+    for ticker in tickers:
+        df = broker.get_data(ticker, args.interval, start_dt, end_dt)
+        if df.empty:
+            print(f"  Warning: no data for {ticker}, skipping.")
+            continue
+        try:
+            sigs = backtester.run(df)
+            signals[ticker] = sigs
+            prices[ticker] = df
+        except Exception as e:
+            print(f"  Warning: signal generation failed for {ticker}: {e}")
+
+    if not signals:
+        print("\n  No signals generated. Aborting.")
+        return
+
+    print(f"  {len(signals)} tickers with signals. Computing unconditional IC...")
+
+    from engine.core.diagnostics.trial_counter import get_total_trials
+    n_trials = get_total_trials(args.strategy)
+
+    analyzer = ICAnalyzer(
+        signals=signals,
+        prices=prices,
+        signal_name=args.strategy,
+        n_trials=n_trials,
+    )
+    ic_result = analyzer.run(horizons=args.horizons or [1, 5, 10, 20, 60])
+    ic_report = render_ic_report(ic_result)
+    print("\n" + ic_report)
+
+    if not ic_result.passes_gate and not args.force:
+        print("\n  IC gate FAILED. Run with --force to compute surface anyway.")
+        return
+
+    horizon = args.primary_horizon or 5
+    ic_series = ic_result.ic_series.get(horizon)
+    if ic_series is None or ic_series.dropna().empty:
+        print(f"\n  No IC series at horizon={horizon}d. Aborting surface analysis.")
+        return
+
+    # Fetch macro data
+    start_str = start_dt.strftime("%Y-%m-%d")
+    end_str = end_dt.strftime("%Y-%m-%d")
+    fetcher = MacroFetcher()
+    macro_dims = []
+    for spec in macro_specs:
+        print(f"  Fetching {spec.series_id} ({spec.source})...")
+        series = fetcher.fetch(spec, start=start_str, end=end_str)
+        if series.empty:
+            print(f"  Warning: no data returned for {spec.series_id}. Skipping.")
+            continue
+        macro_dims.append((series, spec))
+
+    if not macro_dims:
+        print("\n  No macro data fetched. Aborting.")
+        return
+
+    print(f"  Computing conditional IC surface at {horizon}d horizon...")
+    cic = ConditionalIC(ic_series=ic_series, horizon=horizon)
+    cic_result = cic.compute(macro_dims=macro_dims, min_obs_per_bin=args.min_obs)
+    surface_report = render_conditional_ic_report(cic_result, signal_name=args.strategy)
+
+    print("\n" + surface_report)
+
+    if args.save:
+        strat_dir = os.path.join(WORKSPACE_DIR, args.strategy)
+        ic_path = os.path.join(strat_dir, "ic_report.txt")
+        macro_tag = "_".join(s.series_id.replace("^", "") for s in macro_specs)
+        surf_path = os.path.join(strat_dir, f"ic_surface_{macro_tag}.txt")
+        with open(ic_path, "w") as f:
+            f.write(ic_report + "\n")
+        with open(surf_path, "w") as f:
+            f.write(surface_report + "\n")
+        print(f"\n  Reports saved:")
+        print(f"    {ic_path}")
+        print(f"    {surf_path}")
+
+
 # ── Phase 0 diagnostic helpers ────────────────────────────────────────────────
 
 def _expand_param_values(bounds, n_steps: int = 7) -> list:
@@ -1496,6 +1698,8 @@ commands:
   portfolio <strategy>    Run a multi-asset portfolio backtest (full tearsheet)
   train     <strategy>    Run hyperparameter optimisation / model training
   signal    <strategy>    Generate live signals
+  ic        <strategy>    Unconditional IC analysis (gate check before construction)
+  ic-surface <strategy>   Conditional IC surface across macro regime dimensions
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1672,6 +1876,45 @@ commands:
     p.add_argument("--sensitivity", action="store_true",
                    help="Include parameter sensitivity sweep (adds ~21 backtests)")
 
+    # ic ──────────────────────────────────────────────────────────────────────
+    p = sub.add_parser("ic",
+                       help="Unconditional IC analysis — gate check before strategy construction")
+    p.add_argument("strategy")
+    p.add_argument("--tickers",  required=True,
+                   help="Comma-separated tickers (use a universe of 20+ for reliable IC estimates)")
+    p.add_argument("--interval", default="1d",
+                   help="Bar interval (default: 1d)")
+    p.add_argument("--start",    help="Start date YYYY-MM-DD (default: 5 years ago)")
+    p.add_argument("--end",      help="End date   YYYY-MM-DD (default: today)")
+    p.add_argument("--horizons", type=int, nargs="+", metavar="H",
+                   help="Holding horizons in days (default: 1 5 10 20 60)")
+    p.add_argument("--save",     action="store_true",
+                   help="Save report to strategies/<name>/ic_report.txt")
+
+    # ic-surface ──────────────────────────────────────────────────────────────
+    p = sub.add_parser("ic-surface",
+                       help="Conditional IC surface across macro regime dimensions")
+    p.add_argument("strategy")
+    p.add_argument("--tickers",         required=True,
+                   help="Comma-separated tickers")
+    p.add_argument("--interval",        default="1d")
+    p.add_argument("--start",           help="Start date YYYY-MM-DD (default: 5 years ago)")
+    p.add_argument("--end",             help="End date   YYYY-MM-DD (default: today)")
+    p.add_argument("--macro",           required=True, nargs="+", metavar="SERIES:SOURCE[:BINS]",
+                   help="Macro dimensions, e.g. '^VIX:yf:5' 'T10Y2Y:fred:3'. "
+                        "SOURCE is 'yf' (yfinance) or 'fred' (FRED API). "
+                        "BINS is optional quantile count (default 4).")
+    p.add_argument("--horizons",        type=int, nargs="+", metavar="H",
+                   help="Horizons for the unconditional IC pass (default: 1 5 10 20 60)")
+    p.add_argument("--primary-horizon", type=int, default=5, dest="primary_horizon",
+                   help="Horizon to use for the surface analysis (default: 5)")
+    p.add_argument("--min-obs",         type=int, default=20, dest="min_obs",
+                   help="Minimum observations per regime bin (default: 20)")
+    p.add_argument("--force",           action="store_true",
+                   help="Compute surface even if unconditional IC fails the gate")
+    p.add_argument("--save",            action="store_true",
+                   help="Save reports to strategies/<name>/ic_report.txt and ic_surface_*.txt")
+
     return parser
 
 
@@ -1696,6 +1939,8 @@ _DISPATCH = {
     "sensitivity":      cmd_sensitivity,
     "signal-stability": cmd_signal_stability,
     "diagnose":         cmd_diagnose,
+    "ic":               cmd_ic,
+    "ic-surface":       cmd_ic_surface,
 }
 
 

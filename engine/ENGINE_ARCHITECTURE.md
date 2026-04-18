@@ -46,6 +46,7 @@ stock_bot/
 ├── engine/                   # Research engine (this doc)
 │   ├── main.py               # CLI entry (BACKTEST / TRAIN / SIGNAL / INIT / SYNC)
 │   ├── core/                 # Engine library
+│   │   ├── analytics/        # Phase 1 IC analysis (ic_analyzer, macro_fetcher, conditional_ic, report)
 │   │   └── diagnostics/      # Phase 0 diagnostic tools (trial counter, DSR)
 │   ├── daemon/               # FastAPI server + RQ worker
 │   ├── Dockerfile
@@ -609,6 +610,7 @@ index members rather than point-in-time constituents.
 
 Tools for answering whether a strategy has genuine edge or is fitted noise.
 All live under `engine/core/diagnostics/` and `data/diagnostics.db`.
+Phase 1 (signal identification before strategy construction) is covered in §15.
 
 ### 14.1 Trial Counter (`diagnostics/trial_counter.py`)
 
@@ -668,6 +670,140 @@ Four new commands added to `research_cli.py`:
 | `sensitivity <name> --tickers … --interval …` | 7-step sweep across top-3 bound params; prints ASCII Sharpe-vs-param table. Bypasses controller so trial counter is not inflated. |
 | `signal-stability <name> --tickers … --interval …` | Generates signals over full period and 3 five-year subsets; reports Pearson correlation per window (< 0.7 = unstable). |
 | `diagnose <name> --tickers … --interval …` | One-page per-strategy report covering core metrics+DSR, fold distribution (from diagnostics.json), signal stability, optional sensitivity. Emits KEEP / INVESTIGATE / RETIRE verdict (≥2 criteria failing → RETIRE). |
+
+---
+
+## 15. Phase 1: Signal Identification Framework (IC Analytics)
+
+Tools for answering whether a candidate signal has genuine edge before it is built into a
+strategy. All live under `engine/core/analytics/` and are exposed through two new
+`research_cli.py` commands: `ic` and `ic-surface`.
+
+The evaluation workflow is a mandatory gate between feature selection and strategy
+construction:
+
+```
+Candidate signal
+    │
+    ▼
+Unconditional IC analysis  (ic command)
+    │
+    ├─ IC < 0.02 or IC-IR < 0.3 at 5-day horizon  →  DISCARD
+    │
+    └─ Passes gate  →  proceed
+        │
+        ▼
+    Conditional IC surface  (ic-surface command)
+        │
+        ├─ flat       →  signal works everywhere; no regime layer needed
+        ├─ structured  →  build strategy with regime weighting from the surface
+        └─ noisy       →  wrong state space, or signal is fragile; investigate
+        │
+        ▼
+    Strategy construction  →  CPCV backtest + DSR
+```
+
+A signal that does not pass the unconditional IC gate is discarded. No exceptions.
+
+### 15.1 `ICAnalyzer` (`analytics/ic_analyzer.py`)
+
+Computes cross-sectional rank IC for a set of per-ticker signal series and price DataFrames.
+
+**Cross-sectional IC:** at each date t, collect `(signal[ticker][t], fwd_return[ticker][t])`
+pairs across all tickers in the universe, rank them, and compute Spearman rank correlation.
+Averaged over all dates → mean IC. Ratio of mean to std → IC-IR.
+
+`ICResult` carries:
+
+- `mean_ic`, `ic_ir`, `ic_pos_frac` — scalars per horizon [1, 5, 10, 20, 60].
+- `ic_series` — raw daily IC `pd.Series` per horizon (consumed by `ConditionalIC`).
+- `quintile_returns`, `quintile_monotonic`, `quintile_spread` — Q5−Q1 annualized spread
+  and monotonicity check at each horizon.
+- `daily_turnover` — mean `|Δsignal| / 2` across tickers. > 0.5 flags that the signal
+  cannot survive realistic transaction costs.
+- `half_life_days` — first horizon at which mean IC drops to half its peak value. Signals
+  the natural rebalancing frequency.
+- `period_ic_consistency` — ratio of mean IC in first vs second half of the period
+  (1.0 = consistent; lower = time-varying or fragile).
+
+IC benchmarks: mean IC > 0.02 is detectable; > 0.05 is strong. IC-IR > 0.5 is reasonably
+consistent. These thresholds govern the `passes_gate` property.
+
+### 15.2 `MacroFetcher` and `MacroSpec` (`analytics/macro_fetcher.py`)
+
+Fetches macro series from FRED (via the existing `DataFetcher.fetch_macro_data()`) or
+yfinance, and returns a daily-frequency forward-filled `pd.Series`.
+
+CLI format for specifying macro dimensions: `SERIES_ID:SOURCE[:N_BINS]`
+
+```
+^VIX:yf:5        CBOE VIX index via yfinance, 5 quantile bins
+T10Y2Y:fred:3    10Y-2Y yield spread from FRED, 3 bins
+^TNX:yf          10Y Treasury yield, default 4 bins
+BAMLH0A0HYM2:fred  High Yield OAS (credit stress), default 4 bins
+```
+
+`parse_macro_spec(s)` converts the CLI string to a `MacroSpec` dataclass. `MacroFetcher`
+handles timezone normalization and forward-fill to the IC series' trading-day index.
+
+### 15.3 `ConditionalIC` (`analytics/conditional_ic.py`)
+
+Takes the raw daily IC series at a single horizon and a list of `(macro_series, MacroSpec)`
+pairs, bins each macro variable into quantile regimes, and computes IC per regime cell
+(cross-product for multi-dimensional surfaces).
+
+`ConditionalICResult` carries:
+
+- `bins` — `List[RegimeBin]` sorted by mean IC descending. Each `RegimeBin` records
+  `mean_ic`, `ic_ir`, `n_obs`, and the quantile boundaries for each macro dimension.
+- `diagnosis` — `flat | structured | noisy | insufficient_data`.
+  - **flat:** IC range across bins < 0.02 — signal works uniformly, no regime layer needed.
+  - **structured:** best-bin IC > unconditional IC + 0.02 — regime weighting will help.
+  - **noisy:** range exists but no coherent lift — macro state space may be wrong.
+- `unconditional_ic` — the mean IC over the full period (for comparison with regime ICs).
+
+Bins with fewer than `min_obs_per_bin` (default 20) observations are excluded. Falls back
+from quantile-cut to equal-width cut if the macro variable has too few unique values.
+
+### 15.4 Report renderer (`analytics/report.py`)
+
+`render_ic_report(result)` and `render_conditional_ic_report(result, signal_name)` produce
+the standardized evaluation reports. The unconditional report ends with a `VERDICT` line:
+
+```
+VERDICT: PROCEED -> CONDITIONAL IC SURFACE  (strong edge)
+VERDICT: PROCEED -> CONDITIONAL IC SURFACE  (weak but detectable edge)
+VERDICT: DISCARD  (IC=0.0083 < 0.02 or IC-IR=0.1412 < 0.3)
+```
+
+The conditional report identifies the best regime and includes a one-line instruction for
+how to apply regime weighting in `model.py`.
+
+### 15.5 CLI commands
+
+```bash
+# Step 1 — unconditional gate check
+uv run python research_cli.py ic <strategy> \
+    --tickers AAPL,MSFT,GOOGL,...  \   # 20+ tickers for reliable cross-sectional IC
+    --interval 1d                  \
+    --start 2015-01-01             \
+    [--horizons 1 5 10 20 60]      \
+    [--save]                           # writes strategies/<name>/ic_report.txt
+
+# Step 2 — conditional surface (runs unconditional pass first, aborts if gate fails)
+uv run python research_cli.py ic-surface <strategy> \
+    --tickers AAPL,MSFT,GOOGL,...  \
+    --interval 1d                  \
+    --start 2015-01-01             \
+    --macro '^VIX:yf:5' 'T10Y2Y:fred:3' \
+    [--primary-horizon 5]          \   # which horizon to use for the surface
+    [--min-obs 20]                 \   # min observations per regime bin
+    [--force]                      \   # bypass the IC gate
+    [--save]                           # writes ic_report.txt and ic_surface_<dims>.txt
+```
+
+The `ic-surface` command automatically runs the unconditional IC pass first and enforces the
+gate — the surface is not computed if IC fails (override with `--force`).
 
 ---
 
