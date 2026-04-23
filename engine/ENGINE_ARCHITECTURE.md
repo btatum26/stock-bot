@@ -47,7 +47,8 @@ stock_bot/
 │   ├── main.py               # CLI entry (BACKTEST / TRAIN / SIGNAL / INIT / SYNC)
 │   ├── core/                 # Engine library
 │   │   ├── analytics/        # Phase 1 IC analysis (ic_analyzer, macro_fetcher, conditional_ic, report)
-│   │   └── diagnostics/      # Phase 0 diagnostic tools (trial counter, DSR)
+│   │   ├── diagnostics/      # Phase 0 diagnostic tools (trial counter, DSR)
+│   │   └── regime/           # Phase 3 regime detection (rule_based, hmm, bocpd, orchestrator)
 │   ├── daemon/               # FastAPI server + RQ worker
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -126,6 +127,12 @@ owns a strategy directory and performs one vectorized pass per asset. Lifecycle 
      if the manifest's `training.price_normalization` says so.
    - NaN audit: any remaining NaN in a feature column after the purge logs a warning
      (indicates a broken indicator or bad input data).
+   - **Regime context** (optional): if the manifest has `"regime_aware": true`, calls
+     `_build_regime_context(df_clean)` which instantiates `RegimeOrchestrator`, fetches
+     macro data, fits the requested detector, and runs BOCPD. The resulting
+     `RegimeContext` is passed to `generate_signals` only when the model declares the
+     parameter (checked via `inspect.signature`). Failures are caught and logged — the
+     backtest continues without a regime context rather than aborting.
    - **ML / rule-based branching:**
      - **With provided artifacts** (e.g. from disk for ML strategies): apply saved
        `system_scaler` to feature columns via `MLBridge.prepare_inference_matrix`, then
@@ -205,6 +212,10 @@ The single source of truth for a strategy's configuration. Fields:
 - `is_ml` — boolean flag switching the trainer/backtester into the ML code paths
   (label construction, pooled fitting, scaler persistence).
 - `compression_mode` — `"clip"` (default), `"tanh"`, or `"probability"`.
+- `regime_aware` — boolean (default `false`). When `true`, the backtester builds a
+  `RegimeContext` after feature computation and passes it to `generate_signals`.
+- `regime_detector` — `"vix_adx"` | `"term_structure"` | `"hmm"` (default `"vix_adx"`
+  when `regime_aware` is `true`). Selects the regime detector from `REGIME_REGISTRY`.
 - `training` — optional block overriding `LocalTrainer.DEFAULT_TRAINING_CONFIG`: `split_method`
   (`cpcv` or `temporal`), `n_groups`, `k_test_groups`, `embargo_pct`, `train_ratio`,
   `price_normalization`, `ffd_d`, `ffd_window`.
@@ -264,6 +275,9 @@ The contract differs by strategy type:
   - `context` — instance of the generated `Context` class (or `None`).
   - `params` — the hyperparameters dict.
   - `artifacts` — whatever `train()` returned.
+  - `regime_context` *(optional keyword)* — a `RegimeContext` object if the manifest
+    sets `"regime_aware": true` **and** the model's `generate_signals` signature
+    declares this parameter. Strategies that omit it receive the legacy 4-argument call.
 
   It must return a pandas Series (or anything coercible) of conviction values; the
   SignalValidator will compress/bound them.
@@ -807,7 +821,145 @@ gate — the surface is not computed if IC fails (override with `--force`).
 
 ---
 
-## 16. Supporting Modules
+## 16. Phase 3 — Regime Detection Subsystem
+
+### 16.1 Architecture
+
+`engine/core/regime/` is structured parallel to `engine/core/features/`:
+
+```
+engine/core/regime/
+├── base.py         RegimeDetector ABC, REGIME_REGISTRY, register_regime(), RegimeContext
+├── rule_based.py   VixAdxRegime (3-state), TermStructureRegime (2-state)
+├── hmm.py          GaussianHMMRegime — causal forward algorithm over hmmlearn fit
+├── bocpd.py        BayesianCPD — Adams-MacKay BOCPD for novelty scoring
+├── orchestrator.py RegimeOrchestrator — builds macro features, runs detector + BOCPD
+└── __init__.py     Auto-registers all three detectors on import
+```
+
+All detectors inherit `RegimeDetector` and register via `@register_regime("key")`, identical
+in pattern to `@register_feature`.
+
+### 16.2 The Three Layers (in implementation order)
+
+**Layer 1 — Rule-based** (no training, use as validation baseline)
+
+Two deterministic detectors produce one-hot probability vectors shaped identically to
+probabilistic detectors so all downstream code is type-agnostic:
+
+- `VixAdxRegime` (`"regime_detector": "vix_adx"`) — 3 states using ^VIX and ADX:
+  - State 0 *low-vol trending*: VIX < 15 AND ADX > 25 → favour momentum
+  - State 1 *normal ranging*: VIX 15–25 AND ADX < 20 → favour mean-reversion
+  - State 2 *stressed*: VIX > 25 → cut size, favour contrarian
+- `TermStructureRegime` (`"regime_detector": "term_structure"`) — 2 states using the
+  VIX/VIX3M ratio with linear blending in the transition band [0.95, 1.00]:
+  - State 0 *calm contango*: ratio < 0.95
+  - State 1 *stressed backwardation*: ratio > 1.00
+
+**Layer 2 — HMM** (`"regime_detector": "hmm"`)
+
+`GaussianHMMRegime` fits a 3-state Gaussian HMM on four macro features (SPY log-returns,
+21-day realised vol, 5-day HYG log-return inverted as HY-spread proxy, VIX level) via
+`hmmlearn.GaussianHMM`. Critical implementation detail: inference uses the **forward
+algorithm**, not Viterbi. Viterbi decodes the globally most-likely path using the
+*entire* sequence — lookahead bias. The forward algorithm produces P(state_t | x_{1:t}),
+which is causal.
+
+Post-fit: exponential smoothing (halflife = 4 days) suppresses noisy daily flipping.
+Label consistency across retrainings is maintained by matching new emission means to the
+previous fit via nearest-neighbour pairing — prevents the "state 0 in January = state 1
+in February" problem that would corrupt per-regime statistics.
+
+**Layer 3 — BOCPD** (always runs alongside the selected detector)
+
+`BayesianCPD` (in `bocpd.py`) implements Adams & MacKay (2007) with a Normal-Gamma
+conjugate prior on standardised VIX. At each step it maintains a probability distribution
+over run lengths and returns P(run_length < 5 days) per bar. This is the novelty score:
+
+- P < 0.5: the process is running stably in a known regime
+- P > 0.5: the data-generating process likely changed in the last 5 days ("structural break")
+
+When a structural break fires, `RegimeContext.size_multiplier` returns 0.5 for the next
+10 bars, giving strategies a simple way to implement the spec's "reduce position sizes
+by 50% for 10 trading days as a confirmation buffer."
+
+For HMM strategies, the BOCPD score becomes the `novelty` field in `RegimeContext`. For
+rule-based strategies, novelty = max(0, BOCPD) (rule-based detectors return constant 0
+from their own `novelty_score()` since they have no probabilistic model).
+
+### 16.3 Macro Feature Assembly
+
+`RegimeOrchestrator._build_macro_features(df)` fetches external data and computes ADX
+internally. All columns are aligned to `df.index` via forward-fill:
+
+| Column         | Source                                 | Used by                          |
+|----------------|----------------------------------------|----------------------------------|
+| `vix`          | `^VIX` yfinance                        | VixAdxRegime, HMM, BOCPD         |
+| `vix3m`        | `^VIX3M` yfinance                      | TermStructureRegime              |
+| `vix_vix3m`    | `vix / vix3m`                          | TermStructureRegime              |
+| `adx`          | Wilder ADX from df's own OHLCV         | VixAdxRegime                     |
+| `spy_ret`      | SPY log-returns yfinance               | HMM                              |
+| `spy_rvol`     | 21-day rolling std of spy_ret          | HMM                              |
+| `hy_spread_chg`| Inverted HYG 5-day log-return          | HMM                              |
+
+Failures in external fetches are caught and logged; the orchestrator returns whatever
+columns it could successfully assemble rather than aborting.
+
+### 16.4 `RegimeContext` — the payload
+
+```python
+@dataclass
+class RegimeContext:
+    detector_name: str          # key from REGIME_REGISTRY
+    proba: pd.DataFrame         # P(state=k | x_{1:t}); columns = int state IDs, index = df.index
+    labels: pd.Series           # argmax regime per bar (int)
+    novelty: pd.Series          # BOCPD P(run_length < 5), in [0, 1]
+    n_states: int
+    ic_weight: Optional[pd.Series] = None  # reserved for Phase 3.4 conditional IC weighting
+
+    # Convenience
+    def current_regime() -> int
+    def current_proba() -> Dict[int, float]
+    def is_novel(threshold=0.5) -> bool
+    def size_multiplier -> pd.Series   # 1.0 normally; 0.5 for 10 bars after novelty > 0.5
+```
+
+### 16.5 Opt-in Pattern
+
+**manifest.json:**
+```json
+{
+    "regime_aware": true,
+    "regime_detector": "vix_adx"
+}
+```
+
+**model.py** — declare `regime_context` to receive it; omit to stay unaffected:
+```python
+def generate_signals(self, df, context, params, artifacts, regime_context=None):
+    raw = ...  # compute raw signals
+    if regime_context is not None:
+        raw *= regime_context.size_multiplier          # halve size during structural breaks
+        stressed = (regime_context.labels == 2).values
+        raw[stressed] *= 0.5                           # further cut in stressed regime
+    return raw
+```
+
+`LocalBacktester._call_generate_signals` uses `inspect.signature` to detect whether the
+model accepts `regime_context` before passing it — existing strategies need no changes.
+
+### 16.6 IC Surface Weighting (Phase 3.4 — groundwork laid)
+
+The `ic_weight` field in `RegimeContext` is reserved for the operational use of the
+conditional IC surface (computed offline via `research_cli.py ic-surface`). The design:
+when the current macro state's regime bin has IC = 0.08 the signal gets full weight;
+when IC = −0.02 the signal gets zero weight. This is not yet wired into the runtime
+(the offline analysis tooling in `analytics/conditional_ic.py` is complete; the
+lookup-at-inference step is a pending addition to `RegimeOrchestrator`).
+
+---
+
+## 17. Supporting Modules
 
 - **`engine/core/logger.py`** — sets up two loggers: `logger` for engine-wide messages
   and `daemon_logger` for API/worker output. Both write to `engine/logs/`.
@@ -827,7 +979,7 @@ gate — the surface is not computed if IC fails (override with `--force`).
 
 ---
 
-## 17. Execution Matrix
+## 18. Execution Matrix
 
 | Mode             | Features recomputed? | Training happens? | Scaler fit? | Artifacts persisted? |
 |------------------|----------------------|-------------------|-------------|----------------------|
@@ -840,7 +992,7 @@ gate — the surface is not computed if IC fails (override with `--force`).
 
 ---
 
-## 18. Key Invariants to Respect
+## 19. Key Invariants to Respect
 
 These are the load-bearing contracts of the system. Breaking any of them causes silent
 correctness bugs rather than loud failures:
@@ -866,7 +1018,7 @@ correctness bugs rather than loud failures:
 
 ---
 
-## 19. Example Strategies
+## 20. Example Strategies
 
 Illustrative examples from [strategies/](strategies/):
 
@@ -888,7 +1040,7 @@ Illustrative examples from [strategies/](strategies/):
 
 ---
 
-## 20. Testing
+## 21. Testing
 
 All tests live under [engine/tests/](engine/tests/) and run inside the `research_tester`
 Docker container:

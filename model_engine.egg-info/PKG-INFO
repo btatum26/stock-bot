@@ -6,6 +6,7 @@ Requires-Python: >=3.13
 Requires-Dist: alembic>=1.18.4
 Requires-Dist: fakeredis>=2.34.1
 Requires-Dist: fastapi[standard]>=0.135.2
+Requires-Dist: hmmlearn>=0.3.3
 Requires-Dist: httpx>=0.28.1
 Requires-Dist: jinja2>=3.1.6
 Requires-Dist: joblib>=1.5.3

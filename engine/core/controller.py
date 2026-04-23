@@ -62,6 +62,23 @@ class SignalModel(ABC):
     trainer calls ``build_labels`` once per ticker (so author code only
     ever sees a single asset), concatenates the resulting (X, y) across
     tickers, then calls ``fit_model`` once on the pooled matrix.
+
+    Regime-aware strategies
+    -----------------------
+    Set ``"regime_aware": true`` and ``"regime_detector": "<name>"`` in
+    manifest.json.  The backtester will then pass a ``regime_context``
+    keyword argument to ``generate_signals``.  Declare it in your signature
+    to receive it::
+
+        def generate_signals(self, df, context, params, artifacts,
+                             regime_context=None):
+            if regime_context is not None:
+                size = regime_context.size_multiplier
+                proba = regime_context.proba     # pd.DataFrame (T x n_states)
+                novelty = regime_context.novelty # pd.Series [0,1]
+
+    Strategies that do not declare ``regime_context`` receive the original
+    4-argument call and are unaffected — no manifest changes required.
     """
 
     @abstractmethod
@@ -69,6 +86,9 @@ class SignalModel(ABC):
         """Execute signal generation logic.
 
         Returns a Pandas Series with values between -1.0 and 1.0.
+
+        Regime-aware strategies may optionally declare a fifth keyword
+        argument ``regime_context`` (see class docstring).
         """
         pass
 

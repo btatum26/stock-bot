@@ -1,3 +1,4 @@
+import inspect
 import json
 import importlib.util
 import sys
@@ -404,6 +405,38 @@ class LocalBacktester:
                 if nan_count > 0:
                     logger.warning(f"Feature '{col}' has {nan_count} unexpected NaN values after l_max purge.")
 
+    @staticmethod
+    def _call_generate_signals(model, df, context, hyperparams, artifacts, regime_context=None):
+        """Call model.generate_signals, passing regime_context only when the model accepts it.
+
+        Strategies that were written before the regime system simply don't declare
+        the parameter and will receive the original 4-argument call.  Regime-aware
+        strategies declare ``regime_context`` as an optional keyword argument and
+        receive the full context object.
+        """
+        if regime_context is not None:
+            sig = inspect.signature(model.generate_signals)
+            if "regime_context" in sig.parameters:
+                return model.generate_signals(
+                    df, context, hyperparams, artifacts, regime_context=regime_context
+                )
+        return model.generate_signals(df, context, hyperparams, artifacts)
+
+    def _build_regime_context(self, df: pd.DataFrame):
+        """Build a RegimeContext for df when the manifest requests it.
+
+        Returns None if regime_aware is False or if regime detection fails.
+        """
+        if not self.manifest.get("regime_aware", False):
+            return None
+        try:
+            from .regime.orchestrator import RegimeOrchestrator
+            detector_name = self.manifest.get("regime_detector", "vix_adx")
+            return RegimeOrchestrator().build_context(df, detector_name)
+        except Exception as e:
+            logger.warning(f"Regime detection failed, continuing without: {e}")
+            return None
+
     def run(
         self,
         raw_data: pd.DataFrame,
@@ -461,6 +494,8 @@ class LocalBacktester:
             feature_ids = [f['id'] for f in features_config]
             self._audit_nans(df_clean, feature_ids)
 
+            regime_context = self._build_regime_context(df_clean)
+
             # Component Initialization
             model_class, context_class = self._load_user_model_and_context()
             model = model_class()
@@ -486,8 +521,8 @@ class LocalBacktester:
                     df_clean = MLBridge.prepare_inference_matrix(
                         df_clean, feature_cols, l_max=0, artifacts=artifacts
                     )
-                raw_signals = model.generate_signals(
-                    df_clean, context, hyperparams, artifacts
+                raw_signals = self._call_generate_signals(
+                    model, df_clean, context, hyperparams, artifacts, regime_context
                 )
             elif is_ml:
                 # ML strategy without pre-trained artifacts: temporal split
@@ -518,15 +553,15 @@ class LocalBacktester:
                     "ML backtest without saved artifacts: trained on first 80%% "
                     "of data. Run TRAIN mode for proper cross-validated results."
                 )
-                raw_signals = model.generate_signals(
-                    df_eval, context, hyperparams, artifacts
+                raw_signals = self._call_generate_signals(
+                    model, df_eval, context, hyperparams, artifacts, regime_context
                 )
             else:
                 # Rule-based strategy: train() returns static artifacts,
                 # no data leakage risk from in-sample signal generation.
                 artifacts = model.train(df_clean, context, hyperparams)
-                raw_signals = model.generate_signals(
-                    df_clean, context, hyperparams, artifacts
+                raw_signals = self._call_generate_signals(
+                    model, df_clean, context, hyperparams, artifacts, regime_context
                 )
 
             comp_mode = self.manifest.get('compression_mode', 'clip')
@@ -660,6 +695,8 @@ class LocalBacktester:
 
                     self._audit_nans(df_clean, feature_ids)
 
+                    regime_context = self._build_regime_context(df_clean)
+
                     # Instantiate fresh objects to prevent state leakage between assets
                     model = model_class()
                     context = context_class() if context_class else None
@@ -675,8 +712,9 @@ class LocalBacktester:
                                 df_clean, feature_cols, l_max=0,
                                 artifacts=batch_artifacts,
                             )
-                        signals = model.generate_signals(
-                            df_clean, context, hyperparams, batch_artifacts
+                        signals = self._call_generate_signals(
+                            model, df_clean, context, hyperparams, batch_artifacts,
+                            regime_context,
                         )
                     elif is_ml:
                         # ML without artifacts: temporal split to avoid
@@ -700,14 +738,16 @@ class LocalBacktester:
                             df_clean, feature_cols, l_max=0,
                             artifacts=inline_artifacts,
                         )
-                        signals = model.generate_signals(
-                            df_eval, context, hyperparams, inline_artifacts
+                        signals = self._call_generate_signals(
+                            model, df_eval, context, hyperparams, inline_artifacts,
+                            regime_context,
                         )
                     else:
                         # Rule-based: no data leakage risk
                         inline_artifacts = model.train(df_clean, context, hyperparams)
-                        signals = model.generate_signals(
-                            df_clean, context, hyperparams, inline_artifacts
+                        signals = self._call_generate_signals(
+                            model, df_clean, context, hyperparams, inline_artifacts,
+                            regime_context,
                         )
 
                     results[ticker] = signals
