@@ -172,6 +172,9 @@ Checks: file exists → imports cleanly → concrete `SignalModel` subclass foun
 
 ```bash
 uv run python research_cli.py backtest my_strategy --tickers AAPL --interval 1d --start 2020-01-01 --end 2024-01-01
+
+# or with a named universe
+uv run python research_cli.py backtest my_strategy --universe MEGA_CAP_TECH --interval 1d
 ```
 
 Progress streams live. Output includes: Total Return, CAGR, Sharpe, Sortino, Calmar, Max Drawdown, Win Rate, Trade Count, Profit Factor, and a 5-trade log.
@@ -186,6 +189,9 @@ uv run python research_cli.py backtest my_strategy --tickers AAPL --debug
 
 ```bash
 uv run python research_cli.py train my_strategy --tickers AAPL --interval 1d --start 2018-01-01 --end 2024-01-01
+
+# multi-ticker ML training with a universe
+uv run python research_cli.py train my_strategy --universe DOW_30 --interval 1d
 ```
 
 Runs Optuna with Combinatorial Purged Cross-Validation (CPCV). Trial-by-trial log output streams live via the engine logger. The optimised params are reported at the end.
@@ -314,11 +320,15 @@ uv run python research_cli.py backtest <strategy> \
     --end 2024-01-01 \
     --capital 10000 \
     [--debug]
+
+# or use a named universe
+uv run python research_cli.py backtest <strategy> --universe MEGA_CAP_TECH --interval 1d
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--tickers` | required | Comma-separated symbols |
+| `--tickers` | — | Comma-separated symbols (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe, e.g. `DOW_30` (mutually exclusive with `--tickers`) |
 | `--interval` | `1d` | Bar size: `1d`, `1h`, `4h`, `15m`, `1w` |
 | `--start` | 1 year ago | Start date `YYYY-MM-DD` |
 | `--end` | today | End date `YYYY-MM-DD` |
@@ -340,6 +350,9 @@ uv run python research_cli.py portfolio <strategy> \
     [--no-short] \
     [--rebalance] \
     [--debug]
+
+# or use a named universe
+uv run python research_cli.py portfolio <strategy> --universe SECTOR_ETFS --interval 1d
 ```
 
 Runs the full multi-asset portfolio simulation (T+1 execution, 2% risk rule, signal-strength-weighted sizing) and prints a five-section tearsheet:
@@ -352,7 +365,8 @@ Runs the full multi-asset portfolio simulation (T+1 execution, 2% risk rule, sig
 
 | Flag | Default | Description |
 |---|---|---|
-| `--tickers` | required | Comma-separated symbols |
+| `--tickers` | — | Comma-separated symbols (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe, e.g. `SECTOR_ETFS` (mutually exclusive with `--tickers`) |
 | `--interval` | `1d` | Bar size: `1d`, `1h`, `4h`, `15m`, `1w` |
 | `--start` | 1 year ago | Start date `YYYY-MM-DD` |
 | `--end` | today | End date `YYYY-MM-DD` |
@@ -381,7 +395,19 @@ uv run python research_cli.py train <strategy> \
     --start 2018-01-01 \
     --end 2024-01-01 \
     [--debug]
+
+# multi-ticker ML training with a named universe
+uv run python research_cli.py train <strategy> --universe DOW_30 --interval 1d
 ```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tickers` | — | Comma-separated symbols (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe, e.g. `DOW_30` (mutually exclusive with `--tickers`) |
+| `--interval` | `1d` | Bar interval |
+| `--start` | 1 year ago | Start date `YYYY-MM-DD` |
+| `--end` | today | End date `YYYY-MM-DD` |
+| `--debug` | off | Print full engine traceback on error |
 
 Only parameters listed in `parameter_bounds` in the manifest are optimised. Hyperparameters with no bound entry are treated as fixed.
 
@@ -391,9 +417,245 @@ Only parameters listed in `parameter_bounds` in the manifest are optimised. Hype
 
 ```bash
 uv run python research_cli.py signal <strategy> --tickers AAPL,MSFT
+
+# or use a named universe
+uv run python research_cli.py signal <strategy> --universe MEGA_CAP_TECH
 ```
 
+| Flag | Default | Description |
+|---|---|---|
+| `--tickers` | — | Comma-separated symbols (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe (mutually exclusive with `--tickers`) |
+
 Fetches a warm-up window of recent data (size determined by interval), runs the full feature pipeline, and returns the final signal value per ticker. Output is a table with numeric signal, direction (LONG / SHORT / FLAT), and a visual strength bar.
+
+---
+
+### `trial-counts`
+
+```bash
+# View trial counts for all strategies
+uv run python research_cli.py trial-counts
+
+# Manually backfill counts for a strategy
+uv run python research_cli.py trial-counts --set my_strategy --backtest-count 12 --train-count 3
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--set` | — | Strategy name to update |
+| `--backtest-count` | `0` | Backtest run count to record |
+| `--train-count` | `0` | Training run count to record |
+
+Shows how many times each strategy has been backtested and trained. These counts feed the Deflated Sharpe Ratio calculation — the DSR benchmark grows logarithmically with trial count to penalise overfitting through repeated testing.
+
+---
+
+### `sensitivity <strategy>`
+
+```bash
+uv run python research_cli.py sensitivity <strategy> \
+    --tickers AAPL,MSFT,NVDA \
+    --interval 1d \
+    [--params stop_loss,min_consol_days] \
+    [--steps 7]
+
+# or use a named universe
+uv run python research_cli.py sensitivity <strategy> --universe MEGA_CAP_TECH --interval 1d
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tickers` | — | Comma-separated tickers (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe (mutually exclusive with `--tickers`) |
+| `--interval` | `1d` | Bar interval |
+| `--start` | 5 years ago | Start date `YYYY-MM-DD` |
+| `--end` | today | End date `YYYY-MM-DD` |
+| `--params` | top-3 by range width | Comma-separated parameter names to sweep |
+| `--steps` | `7` | Number of steps per parameter |
+
+Sweeps the top-3 bound parameters (or `--params`) across their `parameter_bounds` range in `--steps` evenly-spaced steps, holding all other params at their manifest defaults. Prints an ASCII Sharpe-vs-parameter table per param. Smooth plateau = robust signal; spiky non-monotonic curve = fitted noise. Does **not** increment the trial counter.
+
+---
+
+### `signal-stability <strategy>`
+
+```bash
+uv run python research_cli.py signal-stability <strategy> \
+    --tickers AAPL,MSFT,NVDA \
+    --interval 1d
+
+# or use a named universe
+uv run python research_cli.py signal-stability <strategy> --universe MEGA_CAP_TECH
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tickers` | — | Comma-separated tickers (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe (mutually exclusive with `--tickers`) |
+| `--interval` | `1d` | Bar interval |
+
+Generates signals over the full history (default 2010–present) and three five-year subsets (2010–2015, 2015–2020, 2020–2025). Reports the Pearson correlation between the full-period signals and each subset. Correlation < 0.7 indicates the strategy is fitting period-specific noise rather than a persistent edge.
+
+---
+
+### `diagnose <strategy>`
+
+```bash
+uv run python research_cli.py diagnose <strategy> \
+    --tickers AAPL,MSFT,NVDA \
+    --interval 1d \
+    [--start 2019-01-01] \
+    [--sensitivity]
+
+# or use a named universe
+uv run python research_cli.py diagnose <strategy> --universe MEGA_CAP_TECH --interval 1d
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tickers` | — | Comma-separated tickers (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe (mutually exclusive with `--tickers`) |
+| `--interval` | `1d` | Bar interval |
+| `--start` | 5 years ago | Start date `YYYY-MM-DD` |
+| `--end` | today | End date `YYYY-MM-DD` |
+| `--sensitivity` | off | Include parameter sensitivity sweep (adds ~21 backtests) |
+
+One-page Phase 0 report combining:
+
+1. **Core Metrics** — Sharpe, DSR, Total Return, CAGR, Max Drawdown, Sortino, trade count per ticker
+2. **Fold Distribution** — OOS Sharpe distribution from the last training run's `diagnostics.json` (run `train` first to populate)
+3. **Signal Stability** — Pearson correlation across three five-year subsets
+4. **Verdict** — `KEEP` / `INVESTIGATE` / `RETIRE`
+
+Verdict logic (Bailey & López de Prado): strategy is flagged `RETIRE` when 2 or more of these criteria fail:
+- DSR > 0.5
+- Positive OOS folds > 70%
+- Signal stability correlation > 0.7
+
+---
+
+### `ic <strategy>`
+
+```bash
+uv run python research_cli.py ic <strategy> \
+    --tickers AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA,JPM,BAC,XOM \
+    --interval 1d \
+    --start 2015-01-01 \
+    [--horizons 1 5 10 20 60] \
+    [--save]
+
+# a named universe is strongly recommended for cross-sectional IC
+uv run python research_cli.py ic <strategy> --universe DOW_30 --interval 1d --start 2015-01-01
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tickers` | — | Comma-separated tickers, 20+ recommended (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe — `DOW_30` or `TOP_200` recommended (mutually exclusive with `--tickers`) |
+| `--interval` | `1d` | Bar interval |
+| `--start` | 5 years ago | Start date `YYYY-MM-DD` |
+| `--end` | today | End date `YYYY-MM-DD` |
+| `--horizons` | `1 5 10 20 60` | Holding horizons in days |
+| `--save` | off | Write report to `strategies/<name>/ic_report.txt` |
+
+Computes cross-sectional Spearman rank IC at each horizon. At each date, ranks `(signal, forward_return)` pairs across all tickers and computes correlation. Reports mean IC, IC-IR, quintile spread, turnover, half-life, and period consistency.
+
+**Gate thresholds:** mean IC > 0.02 and IC-IR > 0.3 at the 5-day horizon. Strategies failing the gate are `DISCARD` — do not proceed to `ic-surface` or strategy construction.
+
+---
+
+### `ic-surface <strategy>`
+
+```bash
+uv run python research_cli.py ic-surface <strategy> \
+    --tickers AAPL,MSFT,GOOGL,... \
+    --interval 1d \
+    --start 2015-01-01 \
+    --macro '^VIX:yf:5' 'T10Y2Y:fred:3' \
+    [--primary-horizon 5] \
+    [--min-obs 20] \
+    [--force] \
+    [--save]
+
+# with a named universe
+uv run python research_cli.py ic-surface <strategy> \
+    --universe DOW_30 --interval 1d --start 2015-01-01 \
+    --macro '^VIX:yf:5' 'T10Y2Y:fred:3'
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tickers` | — | Comma-separated tickers (mutually exclusive with `--universe`) |
+| `--universe` | — | Named universe (mutually exclusive with `--tickers`) |
+| `--interval` | `1d` | Bar interval |
+| `--start` | 5 years ago | Start date `YYYY-MM-DD` |
+| `--end` | today | End date `YYYY-MM-DD` |
+| `--macro` | required | One or more macro dimensions: `SERIES_ID:SOURCE[:BINS]`. SOURCE is `yf` or `fred`. BINS defaults to 4. |
+| `--primary-horizon` | `5` | Horizon (days) used for the conditional surface |
+| `--min-obs` | `20` | Minimum observations per regime bin |
+| `--force` | off | Compute surface even if the unconditional IC gate fails |
+| `--save` | off | Write reports to `strategies/<name>/ic_report.txt` and `ic_surface_<dims>.txt` |
+
+Runs the unconditional IC pass first (same as `ic`) and enforces the gate — surface is skipped unless the gate passes or `--force` is set. Then bins each macro dimension into quantile regimes and computes IC per regime cell (cross-product for multi-dimensional surfaces).
+
+**Macro spec format:** `SERIES_ID:SOURCE[:BINS]`
+
+```
+^VIX:yf:5          CBOE VIX via yfinance, 5 quantile bins
+T10Y2Y:fred:3      10Y-2Y yield spread from FRED, 3 bins
+^TNX:yf            10Y Treasury yield, default 4 bins
+BAMLH0A0HYM2:fred  High Yield OAS, default 4 bins
+```
+
+**Diagnosis output:** `flat` (IC uniform across regimes — no regime layer needed), `structured` (best-bin IC > unconditional + 0.02 — add regime weighting), or `noisy` (range exists but no coherent lift).
+
+---
+
+## Named Universes (`--universe`)
+
+Every command that accepts `--tickers` also accepts `--universe NAME` as a mutually exclusive alternative. The name is expanded to a static ticker list before the command runs.
+
+```bash
+# Instead of a manual comma-separated list:
+uv run python research_cli.py backtest my_strategy --tickers AAPL,MSFT,NVDA --interval 1d
+
+# Use a named universe:
+uv run python research_cli.py backtest my_strategy --universe MEGA_CAP_TECH --interval 1d
+```
+
+| Universe name | Size | Description |
+|---|---|---|
+| `MEGA_CAP_TECH` | 7 | AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA |
+| `DOW_30` | 30 | Dow Jones Industrial Average components |
+| `SECTOR_ETFS` | 11 | S&P sector ETFs (XLK, XLF, XLV, …) |
+| `LIQUID_ETFS` | 10 | SPY, QQQ, IWM, TLT, GLD, … |
+| `SEMICONDUCTORS` | 15 | NVDA, AMD, INTC, AVGO, QCOM, … |
+| `FINANCIALS_LARGE` | 15 | JPM, BAC, WFC, GS, MS, … |
+| `HEALTHCARE_PHARMA` | 15 | JNJ, UNH, PFE, ABBV, MRK, … |
+| `CONSUMER_STAPLES` | 15 | PG, KO, PEP, COST, WMT, … |
+| `ENERGY_MAJORS` | 15 | XOM, CVX, COP, SLB, EOG, … |
+| `REITS` | 15 | PLD, AMT, EQIX, PSA, SPG, … |
+| `VOLATILITY_PRODUCTS` | 4 | VXX, UVXY, SVXY, VIXY |
+| `FIXED_INCOME_ETFS` | 15 | TLT, IEF, LQD, HYG, BND, … |
+| `INTERNATIONAL_ETFS` | 15 | EFA, EEM, FXI, EWJ, EWZ, … |
+| `COMMODITIES` | 10 | GLD, SLV, USO, DBA, DBC, … |
+| `GROWTH_TECH` | 15 | SNOW, CRWD, DDOG, ZS, NET, … |
+| `DIVIDEND_ARISTOCRATS` | 15 | JNJ, PG, KO, PEP, MMM, … |
+| `SMALL_CAP_GROWTH` | 5 | IWO, VBK, SLYG, IJT, FYC |
+| `LEVERAGED_ETFS` | 10 | TQQQ, SQQQ, SPXL, SOXL, … |
+| `TOP_200` | 200 | Broad large/mega-cap cross-section |
+
+**Note:** Universe lists are frozen snapshots of current index members — they have survivorship bias for historical backtests. Use with caution for pre-2015 analysis.
+
+**Recommended universes by use case:**
+
+| Use case | Recommended universe |
+|---|---|
+| Quick sanity-check | `MEGA_CAP_TECH` |
+| Cross-sectional IC (`ic`, `ic-surface`) | `DOW_30` or `TOP_200` |
+| Multi-ticker ML training | `DOW_30` or sector-specific |
+| Portfolio backtest | `SECTOR_ETFS` or `LIQUID_ETFS` |
 
 ---
 
@@ -404,3 +666,4 @@ Fetches a warm-up window of recent data (size determined by interval), runs the 
 - `model.py` is only generated once (on `init`). All subsequent edits are manual.
 - The `--json` flag on `list`, `features`, and `inspect` produces clean JSON for programmatic use.
 - Paths and engine access mirror `gui/config.py` exactly (`WORKSPACE_DIR = ./strategies`, `DB_PATH = data/stocks.db`).
+- `--universe` and `--tickers` are mutually exclusive on every command that accepts them. Passing both is an error.

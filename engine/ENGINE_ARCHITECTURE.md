@@ -332,6 +332,10 @@ Current categories and modules:
 - `volume/` — OBV, Volume, VWAP, Anchored VWAP, Volume Profile, Volume Z-score
 - `calendar/` — Weekly and Yearly Cycle features
 - `comparison/` — Ticker Comparison (cross-asset relative strength)
+- `alternative/` — Google Trends, Insider Flow
+- `options/` — Options Flow
+- `macro/` — FRED series (NFCI, ANFCI, HYSpread, T10Y2Y, T10Y3M, VIXCLS, ICSA, DFF) and
+  VIXTermStructure (VIX/VIX3M ratio from yfinance). See §5.5 for details.
 
 ### 5.2 Output schema
 
@@ -371,7 +375,49 @@ params, cache)`, and concatenates every resulting series into a wide DataFrame.
   `{window, period, slow, fast, lookback}` updates a running max. This single number is
   returned alongside the DataFrame and used to purge warmup rows.
 
-### 5.4 Non-stationarity hook
+### 5.5 Macro features (`engine/core/features/macro/`)
+
+Two classes cover all macro feature needs:
+
+**`FredFeature`** (`macro/fred_features.py`) — abstract base for FRED series. Subclasses
+declare `SERIES_ID` and `LABEL`; `compute()` fetches via `DataFetcher.fetch_macro_data()`,
+forward-fills sparse releases onto the price DataFrame's daily index, then derives:
+
+| Output suffix | Formula | Stationary? |
+|---------------|---------|-------------|
+| `_level`  | raw FRED value | No — routed through FFD for ML |
+| `_roc5`   | `series.pct_change(5)` | Yes |
+| `_zscore` | rolling 252-day z-score (`min_periods=63`) | Yes |
+
+Registered subclasses: `NFCI`, `ANFCI`, `HYSpread` (BAMLH0A0HYM2), `T10Y2Y`, `T10Y3M`,
+`VIXCLS`, `ICSA`, `DFF`.
+
+**`VIXTermStructure`** (`macro/vix_term_structure.py`) — fetches `^VIX` and `^VIX3M` via
+yfinance. Outputs:
+
+| Output | Formula | Interpretation |
+|--------|---------|----------------|
+| `VIXTermStructure` (primary) | `^VIX / ^VIX3M` | < 0.90 = contango (calm); > 1.00 = backwardation (stress) |
+| `VIXTermStructure_zscore`    | 252-day rolling z-score of ratio | |
+
+**Macro data — two independent paths.** Macro series reach strategy code in two ways that
+must not be confused:
+
+1. **Feature column path** (this section): `FredFeature` / `VIXTermStructure` register in
+   `FEATURE_REGISTRY` and run through `FeatureOrchestrator`. They produce dated columns in
+   the strategy's feature DataFrame, accessible via `context.features.<col>` or `df[col]`.
+   This is the correct path for strategy signals.
+
+2. **Regime subsystem path** (§16.3): `RegimeOrchestrator._build_macro_features()` fetches
+   `^VIX`, `^VIX3M`, SPY, and HYG directly via yfinance, and `DataFetcher.fetch_macro_data()`
+   indirectly (via `MacroFetcher`). These columns are *not* placed in the feature DataFrame —
+   they feed the regime detector and BOCPD, and reach `model.py` only as `RegimeContext`.
+
+Use the feature column path when the strategy logic depends on a macro series. Use
+`regime_aware: true` in the manifest when the strategy should adapt its position sizing or
+signal direction to the current macro regime state.
+
+### 5.6 Non-stationarity hook
 
 `Feature.non_stationary_outputs(params)` lets a feature declare which of its output columns
 are *non-stationary* under the current parameters (e.g. a raw moving average tracks price

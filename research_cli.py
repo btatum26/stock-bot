@@ -420,7 +420,7 @@ def cmd_backtest(engine: ModelEngine, args) -> None:
       - Any additional metrics returned by Tearsheet
       - A trade log showing the last 5 trades per ticker
     """
-    tickers   = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers   = _resolve_tickers(args)
     start_dt, end_dt = _resolve_dates(args.start, args.end)
     timeframe = {
         "start":    start_dt.isoformat(),
@@ -755,7 +755,7 @@ def cmd_signal(engine: ModelEngine, args) -> None:
     positive = long conviction, negative = short conviction, zero = flat.
     A visual strength bar is printed alongside the numeric value.
     """
-    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers = _resolve_tickers(args)
 
     _header(f"SIGNAL  |  {args.strategy}  |  {', '.join(tickers)}")
 
@@ -974,7 +974,7 @@ def cmd_ic(engine: ModelEngine, args) -> None:
     from engine.core.backtester import LocalBacktester
     from engine.core.analytics import ICAnalyzer, render_ic_report
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers = _resolve_tickers(args)
     start_dt, end_dt = _resolve_dates(args.start, args.end, default_lookback_days=1825)
     strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
     backtester = LocalBacktester(strat_path)
@@ -1059,7 +1059,7 @@ def cmd_ic_surface(engine: ModelEngine, args) -> None:
         render_ic_report, render_conditional_ic_report,
     )
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers = _resolve_tickers(args)
     start_dt, end_dt = _resolve_dates(args.start, args.end, default_lookback_days=1825)
     strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
     backtester = LocalBacktester(strat_path)
@@ -1226,7 +1226,7 @@ def cmd_sensitivity(engine: ModelEngine, args) -> None:
     """
     from engine.core.backtester import LocalBacktester, Tearsheet
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers = _resolve_tickers(args)
     start_dt, end_dt = _resolve_dates(args.start, args.end)
     n_steps = getattr(args, "steps", 7)
 
@@ -1326,7 +1326,7 @@ def cmd_signal_stability(engine: ModelEngine, args) -> None:
     """
     from engine.core.backtester import LocalBacktester
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers = _resolve_tickers(args)
     strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
     backtester = LocalBacktester(strat_path)
     broker = engine._broker
@@ -1406,7 +1406,7 @@ def cmd_diagnose(engine: ModelEngine, args) -> None:
     from engine.core.backtester import LocalBacktester, Tearsheet
     from engine.core.diagnostics.trial_counter import get_total_trials
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    tickers = _resolve_tickers(args)
     start_dt, end_dt = _resolve_dates(args.start, args.end, default_lookback_days=1825)
     strat_path = os.path.join(WORKSPACE_DIR, args.strategy)
 
@@ -1763,8 +1763,11 @@ commands:
     # backtest ────────────────────────────────────────────────────────────────
     p = sub.add_parser("backtest", help="Run a vectorized backtest")
     p.add_argument("strategy")
-    p.add_argument("--tickers",  required=True,
-                   help="Comma-separated ticker symbols (e.g. AAPL,MSFT)")
+    p.add_argument("--tickers",
+                   help="Comma-separated ticker symbols (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe to expand into tickers (e.g. DOW_30). "
+                        f"Available: {', '.join(list_universes())}")
     p.add_argument("--interval", default="1d",
                    help="Bar interval: 1d, 1h, 15m, ... (default: 1d)")
     p.add_argument("--start",    help="Start date YYYY-MM-DD (default: 1 year ago)")
@@ -1830,8 +1833,11 @@ commands:
     # signal ──────────────────────────────────────────────────────────────────
     p = sub.add_parser("signal", help="Generate live signals for a strategy")
     p.add_argument("strategy")
-    p.add_argument("--tickers", required=True,
-                   help="Comma-separated tickers")
+    p.add_argument("--tickers",
+                   help="Comma-separated tickers (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe to expand into tickers. "
+                        f"Available: {', '.join(list_universes())}")
 
     # trial-counts ────────────────────────────────────────────────────────────
     p = sub.add_parser("trial-counts", help="Show or set strategy trial counts")
@@ -1846,8 +1852,11 @@ commands:
     p = sub.add_parser("sensitivity",
                        help="Sweep hyperparameters across bounds and report Sharpe curves")
     p.add_argument("strategy")
-    p.add_argument("--tickers",  required=True,
-                   help="Comma-separated tickers for the sweep backtests")
+    p.add_argument("--tickers",
+                   help="Comma-separated tickers for the sweep backtests (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe to expand into tickers. "
+                        f"Available: {', '.join(list_universes())}")
     p.add_argument("--interval", default="1d")
     p.add_argument("--start",    help="Start date YYYY-MM-DD (default: 5 years ago)")
     p.add_argument("--end",      help="End date   YYYY-MM-DD (default: today)")
@@ -1860,16 +1869,22 @@ commands:
     p = sub.add_parser("signal-stability",
                        help="Test signal correlation across time periods (2010-2025)")
     p.add_argument("strategy")
-    p.add_argument("--tickers",  required=True,
-                   help="Comma-separated tickers")
+    p.add_argument("--tickers",
+                   help="Comma-separated tickers (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe to expand into tickers. "
+                        f"Available: {', '.join(list_universes())}")
     p.add_argument("--interval", default="1d")
 
     # diagnose ────────────────────────────────────────────────────────────────
     p = sub.add_parser("diagnose",
                        help="Run all Phase 0 diagnostics and print a one-page report")
     p.add_argument("strategy")
-    p.add_argument("--tickers",     required=True,
-                   help="Comma-separated tickers")
+    p.add_argument("--tickers",
+                   help="Comma-separated tickers (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe to expand into tickers. "
+                        f"Available: {', '.join(list_universes())}")
     p.add_argument("--interval",    default="1d")
     p.add_argument("--start",       help="Start date YYYY-MM-DD (default: 5 years ago)")
     p.add_argument("--end",         help="End date   YYYY-MM-DD (default: today)")
@@ -1880,8 +1895,11 @@ commands:
     p = sub.add_parser("ic",
                        help="Unconditional IC analysis — gate check before strategy construction")
     p.add_argument("strategy")
-    p.add_argument("--tickers",  required=True,
-                   help="Comma-separated tickers (use a universe of 20+ for reliable IC estimates)")
+    p.add_argument("--tickers",
+                   help="Comma-separated tickers, 20+ recommended (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe — DOW_30 / TOP_200 recommended for IC. "
+                        f"Available: {', '.join(list_universes())}")
     p.add_argument("--interval", default="1d",
                    help="Bar interval (default: 1d)")
     p.add_argument("--start",    help="Start date YYYY-MM-DD (default: 5 years ago)")
@@ -1895,8 +1913,11 @@ commands:
     p = sub.add_parser("ic-surface",
                        help="Conditional IC surface across macro regime dimensions")
     p.add_argument("strategy")
-    p.add_argument("--tickers",         required=True,
-                   help="Comma-separated tickers")
+    p.add_argument("--tickers",
+                   help="Comma-separated tickers (mutually exclusive with --universe)")
+    p.add_argument("--universe",
+                   help=f"Named universe — DOW_30 / TOP_200 recommended for IC. "
+                        f"Available: {', '.join(list_universes())}")
     p.add_argument("--interval",        default="1d")
     p.add_argument("--start",           help="Start date YYYY-MM-DD (default: 5 years ago)")
     p.add_argument("--end",             help="End date   YYYY-MM-DD (default: today)")

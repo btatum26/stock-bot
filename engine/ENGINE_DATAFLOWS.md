@@ -212,7 +212,8 @@ flowchart LR
             RSI_CLS["RSI"]
             MACD_CLS["MACD"]
             ADX_CLS["ADX"]
-            DOTS["... 30+ features"]
+            MACRO_CLS["NFCI · T10Y2Y · HYSpread\nVIXCLS · DFF · ICSA\nANFCI · T10Y3M\nVIXTermStructure"]
+            DOTS["... 40+ features total\nmomentum · trend · volatility\nlevels · volume · calendar\ncomparison · alternative · options · macro"]
         end
 
         REG -->|"feature_cls"| INST["feature_cls()\ninstantiate"]
@@ -233,8 +234,14 @@ flowchart LR
 ```
 
 **Column naming convention:** `Feature.generate_column_name(feature_id, params, output_name)`
-produces deterministic names: `RSI_14`, `BollingerBands_20_2.0_UPPER`, `MACD_SIGNAL`.
+produces deterministic names: `RSI_14`, `BollingerBands_20_2.0_UPPER`, `MACD_SIGNAL`,
+`T10Y2Y_level`, `T10Y2Y_roc5`, `T10Y2Y_zscore`, `VIXTermStructure`, `VIXTermStructure_zscore`.
 Every run on the same manifest yields identical column names.
+
+**Macro features note.** FRED and VIX term structure features fetch external data inside
+`compute()` and align it to `df.index` via forward-fill — they require no changes to the
+orchestrator. The `_level` output of every `FredFeature` subclass is declared non-stationary
+via `non_stationary_outputs()`, so the ML bridge routes it through FFD before scaling.
 
 ---
 
@@ -461,7 +468,8 @@ flowchart LR
 | `pd.DataFrame` (feature-enriched) | OHLCV + N feature columns; same DatetimeIndex | `FeatureOrchestrator.compute_features()` | `LocalBacktester.run()`, `RegimeOrchestrator`, `MLBridge` |
 | `(pd.DataFrame, int)` | `(df_full, l_max)` | `compute_all_features()` | Backtester warmup purge |
 | `FeatureResult` | dataclass: data, levels, zones, heatmaps | `Feature.compute()` | `FeatureOrchestrator` |
-| `pd.DataFrame` (macro) | columns: vix, adx, spy_ret, spy_rvol, hy_spread_chg, vix_vix3m; df.index | `RegimeOrchestrator._build_macro_features()` | `RegimeDetector.fit()`, `BayesianCPD.run()` |
+| `pd.DataFrame` (macro feature columns) | FRED / yfinance series as dated columns in the feature DataFrame: `<ID>_level`, `<ID>_roc5`, `<ID>_zscore`, `VIXTermStructure`, `VIXTermStructure_zscore` | `FredFeature.compute()`, `VIXTermStructure.compute()` via `FeatureOrchestrator` | `SignalModel.generate_signals()` via `df[ctx.features.<col>]` |
+| `pd.DataFrame` (regime macro) | internal regime inputs — columns: vix, adx, spy_ret, spy_rvol, hy_spread_chg, vix_vix3m; **not** in the strategy DataFrame | `RegimeOrchestrator._build_macro_features()` (direct yfinance fetch, independent of FEATURE_REGISTRY) | `RegimeDetector.fit()`, `BayesianCPD.run()` |
 | `RegimeContext` | dataclass: proba (T×K), labels (T,), novelty (T,), n_states | `RegimeOrchestrator.build_context()` | `SignalModel.generate_signals()` (opt-in) |
 | `pd.DataFrame` (proba) | columns = int state IDs; index = df.index; row sums to 1.0 | `RegimeDetector.predict_proba()` | `RegimeContext` |
 | `pd.Series` (novelty) | float in [0,1]; index = macro.index | `BayesianCPD.run()` | `RegimeContext.novelty`, `size_multiplier` |
