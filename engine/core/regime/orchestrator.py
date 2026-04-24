@@ -3,7 +3,7 @@
 Call ``RegimeOrchestrator().build_context(df, detector_name)`` from the
 backtester immediately after feature computation.  The orchestrator:
 
-  1. Fetches VIX, VIX3M, SPY, HYG from yfinance and aligns to df's index.
+  1. Fetches VIX, VIX3M, SPY from yfinance and BAMLH0A0HYM2 (HY OAS) from FRED; aligns to df's index.
   2. Computes ADX from the strategy's own OHLCV data.
   3. Assembles a macro_features DataFrame.
   4. Instantiates and fits the requested detector.
@@ -23,11 +23,13 @@ from sklearn.preprocessing import StandardScaler
 
 from .base import REGIME_REGISTRY, RegimeContext
 from .bocpd import BayesianCPD
+from ..data_broker.fetcher import DataFetcher
 
 logger = logging.getLogger(__name__)
 
-# External tickers fetched for macro features
-_MACRO_TICKERS = ["^VIX", "^VIX3M", "SPY", "HYG"]
+# External tickers fetched for macro features (HYG removed; credit spread comes from FRED)
+_MACRO_TICKERS = ["^VIX", "^VIX3M", "SPY"]
+_CREDIT_SPREAD_SERIES = "BAMLH0A0HYM2"
 
 
 class RegimeOrchestrator:
@@ -122,7 +124,7 @@ class RegimeOrchestrator:
     def _fetch_external(
         self, start: str, end: str, target_idx: pd.DatetimeIndex
     ) -> pd.DataFrame:
-        """Download VIX/VIX3M/SPY/HYG and align to target_idx."""
+        """Download VIX/VIX3M/SPY from yfinance and BAMLH0A0HYM2 from FRED; align to target_idx."""
         out = pd.DataFrame(index=target_idx)
 
         try:
@@ -132,42 +134,48 @@ class RegimeOrchestrator:
             )
             if raw.empty:
                 logger.warning("yfinance returned empty data for macro tickers.")
-                return out
+            else:
+                if isinstance(raw.columns, pd.MultiIndex):
+                    raw = raw["Close"]
 
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw = raw["Close"]
+                if raw.index.tz is not None:
+                    raw.index = raw.index.tz_localize(None)
 
-            if raw.index.tz is not None:
-                raw.index = raw.index.tz_localize(None)
+                aligned = raw.reindex(
+                    target_idx.union(raw.index)
+                ).sort_index().ffill().reindex(target_idx)
 
-            # Reindex to target: forward-fill across weekends / holidays
-            aligned = raw.reindex(
-                target_idx.union(raw.index)
-            ).sort_index().ffill().reindex(target_idx)
+                if "^VIX" in aligned.columns:
+                    out["vix"] = aligned["^VIX"]
 
-            # VIX level
-            if "^VIX" in aligned.columns:
-                out["vix"] = aligned["^VIX"]
+                if "^VIX" in aligned.columns and "^VIX3M" in aligned.columns:
+                    out["vix3m"] = aligned["^VIX3M"]
+                    denom = aligned["^VIX3M"].replace(0.0, np.nan)
+                    out["vix_vix3m"] = aligned["^VIX"] / denom
 
-            # VIX term structure ratio
-            if "^VIX" in aligned.columns and "^VIX3M" in aligned.columns:
-                out["vix3m"] = aligned["^VIX3M"]
-                denom = aligned["^VIX3M"].replace(0.0, np.nan)
-                out["vix_vix3m"] = aligned["^VIX"] / denom
-
-            # SPY features for HMM
-            if "SPY" in aligned.columns:
-                spy = aligned["SPY"]
-                out["spy_ret"]  = np.log(spy / spy.shift(1))
-                out["spy_rvol"] = out["spy_ret"].rolling(21).std() * np.sqrt(252)
-
-            # High-yield spread proxy (HYG 5-day log-change; rising = spread widening)
-            if "HYG" in aligned.columns:
-                hyg = aligned["HYG"]
-                out["hy_spread_chg"] = -np.log(hyg / hyg.shift(5))  # inverted: price↑ = spread↓
+                if "SPY" in aligned.columns:
+                    spy = aligned["SPY"]
+                    out["spy_ret"]  = np.log(spy / spy.shift(1))
+                    out["spy_rvol"] = out["spy_ret"].rolling(21).std() * np.sqrt(252)
 
         except Exception as e:
-            logger.warning(f"Macro data fetch failed: {e}")
+            logger.warning(f"yfinance macro fetch failed: {e}")
+
+        # ICE BofA HY OAS from FRED — pure credit spread, no duration or fund-flow noise
+        try:
+            fetcher = DataFetcher()
+            fred_df = fetcher.fetch_macro_data(_CREDIT_SPREAD_SERIES, start, end)
+            if not fred_df.empty:
+                spread = fred_df.set_index("date")["value"].rename(_CREDIT_SPREAD_SERIES)
+                spread.index = pd.to_datetime(spread.index)
+                spread = spread.reindex(
+                    target_idx.union(spread.index)
+                ).sort_index().ffill().reindex(target_idx)
+                out["hy_spread_chg"] = spread.diff(5)
+            else:
+                logger.warning(f"FRED returned empty data for {_CREDIT_SPREAD_SERIES}; hy_spread_chg will be NaN.")
+        except Exception as e:
+            logger.warning(f"FRED credit spread fetch failed: {e}")
 
         return out
 

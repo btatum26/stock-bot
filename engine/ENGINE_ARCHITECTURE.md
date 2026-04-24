@@ -409,8 +409,8 @@ must not be confused:
    This is the correct path for strategy signals.
 
 2. **Regime subsystem path** (§16.3): `RegimeOrchestrator._build_macro_features()` fetches
-   `^VIX`, `^VIX3M`, SPY, and HYG directly via yfinance, and `DataFetcher.fetch_macro_data()`
-   indirectly (via `MacroFetcher`). These columns are *not* placed in the feature DataFrame —
+   `^VIX`, `^VIX3M`, and SPY directly via yfinance, and `BAMLH0A0HYM2` (ICE BofA HY OAS)
+   via `DataFetcher.fetch_macro_data()`. These columns are *not* placed in the feature DataFrame —
    they feed the regime detector and BOCPD, and reach `model.py` only as `RegimeContext`.
 
 Use the feature column path when the strategy logic depends on a macro series. Use
@@ -905,7 +905,7 @@ probabilistic detectors so all downstream code is type-agnostic:
 **Layer 2 — HMM** (`"regime_detector": "hmm"`)
 
 `GaussianHMMRegime` fits a 3-state Gaussian HMM on four macro features (SPY log-returns,
-21-day realised vol, 5-day HYG log-return inverted as HY-spread proxy, VIX level) via
+21-day realised vol, 5-day change in BAMLH0A0HYM2 HY OAS from FRED, VIX level) via
 `hmmlearn.GaussianHMM`. Critical implementation detail: inference uses the **forward
 algorithm**, not Viterbi. Viterbi decodes the globally most-likely path using the
 *entire* sequence — lookahead bias. The forward algorithm produces P(state_t | x_{1:t}),
@@ -946,7 +946,7 @@ internally. All columns are aligned to `df.index` via forward-fill:
 | `adx`          | Wilder ADX from df's own OHLCV         | VixAdxRegime                     |
 | `spy_ret`      | SPY log-returns yfinance               | HMM                              |
 | `spy_rvol`     | 21-day rolling std of spy_ret          | HMM                              |
-| `hy_spread_chg`| Inverted HYG 5-day log-return          | HMM                              |
+| `hy_spread_chg`| `BAMLH0A0HYM2` 5-day diff (FRED)      | HMM                              |
 
 Failures in external fetches are caught and logged; the orchestrator returns whatever
 columns it could successfully assemble rather than aborting.
