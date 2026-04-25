@@ -160,6 +160,25 @@ class MyStrategyModel(SignalModel):
         return signals
 ```
 
+**Cross-sectional strategies** — if the manifest has `"cross_sectional": true`, both
+`train` and `generate_signals` receive the full universe at once:
+
+```python
+class MyCrossSectionalModel(SignalModel):
+
+    def train(self, data: Dict[str, pd.DataFrame], ctx: Context, params: dict) -> dict:
+        return {}  # universe-level pre-computation goes here
+
+    def generate_signals(self, data: Dict[str, pd.DataFrame], ctx: Context,
+                         params: dict, artifacts: dict) -> Dict[str, pd.Series]:
+        # data = {ticker: warmup-purged DataFrame with all features}
+        # compute cross-sectional z-scores, rankings, etc.
+        # return one signal Series per ticker, values in [-1.0, 1.0]
+        ...
+```
+
+See `ENGINE_ARCHITECTURE.md §4.3` for the full contract.
+
 ### 8. Validate model.py before running
 
 ```bash

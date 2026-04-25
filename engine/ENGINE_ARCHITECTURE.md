@@ -146,6 +146,16 @@ owns a strategy directory and performs one vectorized pass per asset. Lifecycle 
      `df_clean.index`, using the manifest's `compression_mode` (`clip`, `tanh`, or
      `probability`).
 
+3. **Cross-sectional mode** (when `"cross_sectional": true` in the manifest). The
+   per-asset loop above is bypassed entirely. Instead:
+   - All features are computed and warmup-purged for every ticker first, producing
+     `processed: Dict[str, pd.DataFrame]`.
+   - A single model instance is created; `model.train(processed, ctx, params)` is
+     called once with the full universe dict.
+   - `model.generate_signals(processed, ctx, params, artifacts)` is called once and
+     must return `Dict[str, pd.Series]`.
+   - Each ticker's returned Series is passed through `SignalValidator` independently.
+
 ### 3.4 Metrics (Tearsheet)
 
 `Tearsheet.calculate_metrics` ([engine/core/backtester.py:33](engine/core/backtester.py#L33))
@@ -216,6 +226,12 @@ The single source of truth for a strategy's configuration. Fields:
   `RegimeContext` after feature computation and passes it to `generate_signals`.
 - `regime_detector` — `"vix_adx"` | `"term_structure"` | `"hmm"` (default `"vix_adx"`
   when `regime_aware` is `true`). Selects the regime detector from `REGIME_REGISTRY`.
+- `cross_sectional` — boolean (default `false`). When `true`, `run_batch()` skips
+  the per-asset loop and calls `model.train()` and `model.generate_signals()` **once**
+  with the full `Dict[str, pd.DataFrame]` universe (all features already computed,
+  warmup-purged). The model returns `Dict[str, pd.Series]` and each ticker's signals
+  are validated independently. Enables universe-wide z-scoring, ranking, and quintile
+  selection. See §4.3 for the model contract.
 - `training` — optional block overriding `LocalTrainer.DEFAULT_TRAINING_CONFIG`: `split_method`
   (`cpcv` or `temporal`), `n_groups`, `k_test_groups`, `embargo_pct`, `train_ratio`,
   `price_normalization`, `ffd_d`, `ffd_window`.
@@ -281,6 +297,15 @@ The contract differs by strategy type:
 
   It must return a pandas Series (or anything coercible) of conviction values; the
   SignalValidator will compress/bound them.
+
+- **Cross-sectional strategies** (`cross_sectional: true`). Implement `train()` and
+  `generate_signals()` with the universe dict signature:
+  - `train(data: Dict[str, pd.DataFrame], context, params) -> dict` — receives all
+    tickers' warmup-purged feature DataFrames at once. Use for universe-level pre-computation.
+  - `generate_signals(data: Dict[str, pd.DataFrame], context, params, artifacts) -> Dict[str, pd.Series]`
+    — full visibility across the universe enables cross-sectional z-scoring, quintile
+    ranking, and dispersion-based signals. Each returned Series is validated and
+    compressed independently by `SignalValidator`.
 
 - **ML strategies** (`is_ml: true`). Implement `build_labels()`, `fit_model()`, and
   `generate_signals()`. The trainer calls `build_labels` once per ticker — so user code
