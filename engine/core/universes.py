@@ -13,6 +13,35 @@ from typing import Dict, List
 
 
 UNIVERSES: Dict[str, List[str]] = {
+    # ~80-stock proxy for Russell 2000 / S&P 600 small-to-mid-cap universe.
+    # Survivors-only snapshot (same caveat as all universes here).
+    # Skews liquid: min ~$500M market cap at time of selection so yfinance
+    # has clean daily OHLCV. Sector-balanced across 8 groups.
+    "SMALL_MID_CAP": [
+        # Semiconductors / hardware
+        "AMBA", "POWI", "AEIS", "FORM", "COHU", "DIOD", "SMTC", "SLAB", "ICHR",
+        # Software / internet
+        "EGHT", "BAND", "LPSN", "MGNI", "PUBM",
+        # Healthcare devices / services
+        "LMAT", "NEOG", "PDCO", "PAHC", "CRVL", "IRTC",
+        # Biotech (established, multi-year history)
+        "ACAD", "NVCR", "HALO", "INVA", "NVAX",
+        # Regional banks
+        "IBOC", "WSFS", "HAFC", "GBCI", "BANF", "WAFD", "TRMK", "NBTB", "CATY",
+        "SFNC", "UMBF", "FFIN",
+        # Specialty finance
+        "WRLD", "PRAA", "FCNCA",
+        # Restaurants / consumer discretionary
+        "BJRI", "CAKE", "JACK", "DINE", "PLAY", "RICK", "CATO", "BOOT",
+        # Industrials / business services
+        "AIN", "GMS", "ARCB", "MRCY", "HURN", "PLUS", "ASTE", "KFRC",
+        # Energy (small E&P / oilfield services)
+        "CIVI", "RES", "VNOM", "MTDR",
+        # REITs
+        "IIPR", "GOOD", "ROIC", "NHI", "STAG",
+        # Materials / building products
+        "MLI", "HWKN", "TREX", "UFP",
+    ],
     "MEGA_CAP_TECH": [
         "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
     ],
@@ -22,7 +51,7 @@ UNIVERSES: Dict[str, List[str]] = {
         "MMM", "MRK", "MSFT", "NKE", "PG", "TRV", "UNH", "V", "VZ", "WBA", "WMT",
     ],
     "SECTOR_ETFS": [
-        "XLK", "XLF", "XLV", "XLE", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC",
+        "XLK", "XLF", "XLV", "XLE", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC"
     ],
     "LIQUID_ETFS": [
         "SPY", "QQQ", "IWM", "DIA", "EFA", "EEM", "TLT", "GLD", "SLV", "USO",

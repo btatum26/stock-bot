@@ -406,6 +406,11 @@ class LocalBacktester:
                     logger.warning(f"Feature '{col}' has {nan_count} unexpected NaN values after l_max purge.")
 
     @staticmethod
+    def _call_generate_signals_cross_sectional(model, data, context, hyperparams, artifacts):
+        """Call generate_signals with the full universe dict (cross_sectional: true path)."""
+        return model.generate_signals(data, context, hyperparams, artifacts)
+
+    @staticmethod
     def _call_generate_signals(model, df, context, hyperparams, artifacts, regime_context=None):
         """Call model.generate_signals, passing regime_context only when the model accepts it.
 
@@ -677,6 +682,52 @@ class LocalBacktester:
             price_norm = training_cfg.get("price_normalization", "none")
             ffd_d_cfg = float(training_cfg.get("ffd_d", 0.4))
             ffd_window_cfg = int(training_cfg.get("ffd_window", 10))
+
+            if self.manifest.get("cross_sectional", False):
+                # Phase 1: compute features for all tickers simultaneously
+                processed: Dict[str, pd.DataFrame] = {}
+                for ticker, df_raw in datasets.items():
+                    try:
+                        df_full, l_max = compute_all_features(df_raw, features_config)
+                        df_clean = df_full.iloc[l_max:].copy()
+                        if price_norm != "none":
+                            df_clean = MLBridge.apply_price_normalization(
+                                df_clean, price_norm,
+                                ffd_d=ffd_d_cfg, ffd_window=ffd_window_cfg,
+                            )
+                        self._audit_nans(df_clean, feature_ids)
+                        processed[ticker] = df_clean
+                    except Exception as e:
+                        logger.error(f"Feature computation failed for {ticker}: {e}")
+
+                if not processed:
+                    return results
+
+                # Phase 2: single model call with the full universe
+                model = model_class()
+                context = context_class() if context_class else None
+                if batch_artifacts is not None:
+                    raw_result = self._call_generate_signals_cross_sectional(
+                        model, processed, context, hyperparams, batch_artifacts
+                    )
+                else:
+                    inline_artifacts = model.train(processed, context, hyperparams)
+                    raw_result = self._call_generate_signals_cross_sectional(
+                        model, processed, context, hyperparams, inline_artifacts
+                    )
+
+                # Phase 3: validate each ticker's signals independently
+                comp_mode = self.manifest.get('compression_mode', 'clip')
+                for ticker, raw_signals in raw_result.items():
+                    if ticker in processed:
+                        try:
+                            results[ticker] = SignalValidator.validate_and_compress(
+                                raw_signals, processed[ticker].index, comp_mode
+                            )
+                        except Exception as e:
+                            logger.error(f"Signal validation failed for {ticker}: {e}")
+                            results[ticker] = pd.Series(dtype=float)
+                return results
 
             for ticker, df_raw in datasets.items():
                 logger.info(f"Processing batch execution for {ticker}")

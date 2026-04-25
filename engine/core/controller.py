@@ -79,6 +79,24 @@ class SignalModel(ABC):
 
     Strategies that do not declare ``regime_context`` receive the original
     4-argument call and are unaffected — no manifest changes required.
+
+    Cross-sectional strategies
+    --------------------------
+    Set ``"cross_sectional": true`` in manifest.json.  Instead of being
+    called once per ticker with a single DataFrame, ``generate_signals``
+    and ``train`` are each called **once** with the full universe::
+
+        def train(self, data: Dict[str, pd.DataFrame], context, params) -> dict:
+            # data maps ticker -> feature-computed, warmup-purged DataFrame
+            return {}
+
+        def generate_signals(self, data: Dict[str, pd.DataFrame], context,
+                             params, artifacts) -> Dict[str, pd.Series]:
+            # Compute cross-sectional z-scores, rank, etc.
+            # Return one signal Series per ticker, values in [-1.0, 1.0].
+            ...
+
+    Each ticker's returned Series is validated and compressed independently.
     """
 
     @abstractmethod

@@ -612,16 +612,41 @@ fill daily gaps). Each produces three output columns:
 |---|---|---|
 | `_LEVEL` | Raw FRED value | Non-stationary — auto-routed through FFD by trainer |
 | `_ROC5` | 5-day percent change | Stationary |
-| `_ZSCORE` | 252-day rolling z-score (min 63 obs) | Stationary |
+| `_ZSCORE` | 252-day rolling z-score (min 63 obs) of the **level** | Stationary |
 
 The `non_stationary_outputs()` method declares `_LEVEL` so the ML trainer automatically
 routes it through fractional differentiation before scaling.
+
+**FRED series quick reference:**
+
+| Feature ID | FRED Series | Description |
+|---|---|---|
+| `NFCI` | NFCI | Chicago Fed National Financial Conditions Index (weekly, ffilled) |
+| `ANFCI` | ANFCI | Adjusted NFCI — removes business-cycle variation |
+| `HYSpread` | BAMLH0A0HYM2 | ICE BofA High-Yield OAS (leading credit stress indicator) |
+| `T10Y2Y` | T10Y2Y | 10Y minus 2Y Treasury spread (yield curve, recession predictor) |
+| `T10Y3M` | T10Y3M | 10Y minus 3M Treasury spread (St. Louis Fed recession model input) |
+| `VIXCLS` | VIXCLS | VIX (FRED daily close, overlaps with yfinance ^VIX) |
+| `ICSA` | ICSA | Initial jobless claims (weekly labor market stress) |
+| `DFF` | DFF | Effective fed funds rate |
+
+**Important column naming gotcha**: `HYSpread` uses `COLUMN_PREFIX = "HYSpread"` (not
+`"BAMLH0A0HYM2"`). All other FRED features use their SERIES_ID as the column prefix.
+
+**Important distinction**: `_ZSCORE` is the 252-day z-score of the **raw level**, not of
+`_ROC5`. If you need the z-score of the 5-day momentum, compute it yourself in model.py
+from `_ROC5` — the feature only gives you the level's z-score.
 
 **VIX term structure** — `VIXTermStructure`
 
 Fetches `^VIX` and `^VIX3M` from yfinance and computes `VIX / VIX3M`. Values below
 0.90 indicate deep contango (calm); above 1.00 indicates backwardation (stress). Outputs
 the raw ratio and its 252-day z-score.
+
+| Output attr | Column name | Description |
+|---|---|---|
+| `VIXTERMSTRUCTURE` | `VIXTermStructure` | Raw VIX/VIX3M ratio |
+| `VIXTERMSTRUCTURE_ZSCORE` | `VIXTermStructure_ZSCORE` | 252-day rolling z-score of ratio |
 
 Example manifest entry (no parameters needed):
 
@@ -630,6 +655,28 @@ Example manifest entry (no parameters needed):
 {"id": "T10Y2Y"}
 {"id": "VIXTermStructure"}
 ```
+
+**Macro strategy pattern — using features without fetching data in model.py:**
+
+The correct way to build a macro signal is to declare the features in `manifest.json`
+and consume the pre-computed columns in `model.py`. Do not call FRED or yfinance directly
+from `generate_signals()`.
+
+```python
+# manifest.json
+{"id": "HYSpread", "params": {}}   # gives HYSPREAD_ROC5, HYSPREAD_LEVEL, HYSPREAD_ZSCORE
+{"id": "NFCI", "params": {}}       # gives NFCI_LEVEL, NFCI_ROC5, NFCI_ZSCORE
+{"id": "VIXTermStructure", "params": {}}  # gives VIXTERMSTRUCTURE, VIXTERMSTRUCTURE_ZSCORE
+
+# model.py — all pandas, no external calls
+def generate_signals(self, df, ctx, artifacts=None):
+    hy_roc5 = df[ctx.features.HYSPREAD_ROC5]   # 5-day ROC of HY OAS
+    nfci    = df[ctx.features.NFCI_LEVEL]       # raw NFCI index
+    ratio   = df[ctx.features.VIXTERMSTRUCTURE] # VIX/VIX3M
+```
+
+See `strategies/macro_regime_rotation/model.py` for a complete example implementing
+a three-component composite macro score.
 
 ### Options features (`options/`)
 

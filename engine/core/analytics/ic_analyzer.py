@@ -149,7 +149,7 @@ class ICAnalyzer:
                 continue
 
             pair_df = pd.DataFrame({"signal": sig_vals, "fwd": fwd_vals}).dropna()
-            pair_df["quintile"] = pd.qcut(pair_df["signal"], 5, labels=False) + 1
+            pair_df["quintile"] = pd.qcut(pair_df["signal"], 5, labels=False, duplicates="drop") + 1
             q_means = pair_df.groupby("quintile")["fwd"].mean() * (252 / h)
             row = {"horizon": h}
             for q in range(1, 6):
