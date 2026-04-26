@@ -156,14 +156,27 @@ class ModelEngine:
             raise StrategyError(f"Strategy directory not found: {strategy_dir}")
 
         manifest_path = os.path.join(strategy_dir, "manifest.json")
+
+        # Merge into existing manifest so fields the GUI doesn't know about
+        # (training, is_ml, compression_mode, regime_aware, etc.) are preserved.
+        existing: dict = {}
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r") as f:
+                try:
+                    existing = json.load(f)
+                except json.JSONDecodeError:
+                    pass
+
+        merged = {**existing, **config}
+
         with open(manifest_path, "w") as f:
-            json.dump(config, f, indent=4)
+            json.dump(merged, f, indent=4)
 
         wm = WorkspaceManager(strategy_dir)
         wm.sync(
-            features=config.get("features", []),
-            hparams=config.get("hyperparameters", {}),
-            bounds=config.get("parameter_bounds", {}),
+            features=merged.get("features", []),
+            hparams=merged.get("hyperparameters", {}),
+            bounds=merged.get("parameter_bounds", {}),
         )
 
     def save_training_config(self, strategy_name: str, training_config: dict) -> None:

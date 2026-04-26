@@ -20,8 +20,7 @@ redis_pool = None
 redis_client = None
 task_queue = None
 
-# Calculate the absolute path to the strategies directory
-STRATEGIES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src/strategies'))
+STRATEGIES_DIR = config.STRATEGIES_FOLDER
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

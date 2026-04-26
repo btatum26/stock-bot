@@ -60,7 +60,7 @@ stock_bot/
 │   ├── ml_XGBoost/
 │   ├── ml_regime_hybrid/
 │   └── volitility_regime_identifier/
-└── research_cli.py           # LLM-facing CLI for strategy authoring
+└── CLI.py           # LLM-facing CLI for strategy authoring
 ```
 
 The engine is mounted inside Docker containers at `/code/engine`, with `PYTHONPATH=/code`
@@ -75,7 +75,7 @@ the host.
 
 Three front-ends converge on the same `ApplicationController.execute_job()`:
 
-- **CLI** ([engine/main.py](engine/main.py)): direct synchronous execution. Parses
+- **CLI** ([CLI.py (repo root)](CLI.py (repo root))): direct synchronous execution. Parses
   `BACKTEST | TRAIN | SIGNAL | INIT | SYNC` and a ticker/interval/timeframe, then calls the
   controller.
 - **API** ([engine/daemon/main.py](engine/daemon/main.py)): `POST /api/v1/jobs` validates
@@ -274,7 +274,7 @@ user code can write `ctx.features.RSI_14` instead of `df["RSI_14"]`. Multi-outpu
 (MACD, Bollinger Bands) are expanded into one attribute per output (`MACD_LINE`,
 `MACD_SIGNAL`, `MACD_HIST`).
 
-**Never edit `context.py` by hand** — run `research_cli.py sync <name>` (or
+**Never edit `context.py` by hand** — run `CLI.py sync <name>` (or
 `python main.py SYNC --strategy <name>`) after any manifest change and the file is
 regenerated from scratch.
 
@@ -685,7 +685,7 @@ still raises `NotImplementedError` for `PORTFOLIO` mode via the CLI path.
 [engine/core/universes.py](engine/core/universes.py) defines static ticker universes
 (`MEGA_CAP_TECH`, `DOW_30`, `SECTOR_ETFS`, `LIQUID_ETFS`, `SEMICONDUCTORS`,
 `FINANCIALS_LARGE`, `HEALTHCARE_PHARMA`, etc.) that can be passed via
-`research_cli.py`'s `--universe <NAME>` flag to expand into a ticker list. Flagged as a
+`CLI.py`'s `--universe <NAME>` flag to expand into a ticker list. Flagged as a
 TODO because the current lists are survivor-biased — they're frozen snapshots of current
 index members rather than point-in-time constituents.
 
@@ -747,7 +747,7 @@ and returned in the `trainer.run()` result dict under `fold_diagnostics`. The
 
 ### 14.4 Research CLI Diagnostic Commands
 
-Four new commands added to `research_cli.py`:
+Four new commands added to `CLI.py`:
 
 | Command | Purpose |
 |---------|---------|
@@ -762,7 +762,7 @@ Four new commands added to `research_cli.py`:
 
 Tools for answering whether a candidate signal has genuine edge before it is built into a
 strategy. All live under `engine/core/analytics/` and are exposed through two new
-`research_cli.py` commands: `ic` and `ic-surface`.
+`CLI.py` commands: `ic` and `ic-surface`.
 
 The evaluation workflow is a mandatory gate between feature selection and strategy
 construction:
@@ -868,7 +868,7 @@ how to apply regime weighting in `model.py`.
 
 ```bash
 # Step 1 — unconditional gate check
-uv run python research_cli.py ic <strategy> \
+uv run python CLI.py ic <strategy> \
     --tickers AAPL,MSFT,GOOGL,...  \   # 20+ tickers for reliable cross-sectional IC
     --interval 1d                  \
     --start 2015-01-01             \
@@ -876,7 +876,7 @@ uv run python research_cli.py ic <strategy> \
     [--save]                           # writes strategies/<name>/ic_report.txt
 
 # Step 2 — conditional surface (runs unconditional pass first, aborts if gate fails)
-uv run python research_cli.py ic-surface <strategy> \
+uv run python CLI.py ic-surface <strategy> \
     --tickers AAPL,MSFT,GOOGL,...  \
     --interval 1d                  \
     --start 2015-01-01             \
@@ -1022,7 +1022,7 @@ model accepts `regime_context` before passing it — existing strategies need no
 ### 16.6 IC Surface Weighting (Phase 3.4 — groundwork laid)
 
 The `ic_weight` field in `RegimeContext` is reserved for the operational use of the
-conditional IC surface (computed offline via `research_cli.py ic-surface`). The design:
+conditional IC surface (computed offline via `CLI.py ic-surface`). The design:
 when the current macro state's regime bin has IC = 0.08 the signal gets full weight;
 when IC = −0.02 the signal gets zero weight. This is not yet wired into the runtime
 (the offline analysis tooling in `analytics/conditional_ic.py` is complete; the

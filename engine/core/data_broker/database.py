@@ -1,10 +1,12 @@
 import os
+from datetime import datetime
+from typing import Optional
 import pandas as pd
 from sqlalchemy import (
     create_engine, Column, String, Float, DateTime, Integer,
     UniqueConstraint, Index, text, event
 )
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.pool import NullPool
 from ..logger import data_logger as logger
 
@@ -27,6 +29,19 @@ class OHLCV(Base):
         UniqueConstraint('ticker', 'timestamp', 'interval', name='_ticker_ts_interval_uc'),
         Index('idx_ticker_ts_interval', 'ticker', 'timestamp', 'interval'),
     )
+
+class FetchLedger(Base):
+    """Tracks (ticker, interval) ranges confirmed to have no upstream data.
+
+    When a backward-gap fetch succeeds but returns nothing, we record
+    `empty_before` so subsequent requests skip the redundant round-trip.
+    """
+    __tablename__ = 'fetch_ledger'
+
+    ticker       = Column(String,   primary_key=True)
+    interval     = Column(String,   primary_key=True)
+    empty_before = Column(DateTime, nullable=False)
+
 
 class Database:
     def __init__(self, db_path="data/stocks.db"):
@@ -153,3 +168,28 @@ class Database:
         except Exception as e:
             logger.error(f"Error retrieving data from database: {e}", exc_info=True)
             return pd.DataFrame()
+
+    def get_empty_before(self, ticker: str, interval: str) -> Optional[datetime]:
+        """Returns the `empty_before` sentinel for (ticker, interval), or None."""
+        with Session(self.engine) as session:
+            row = session.get(FetchLedger, (ticker, interval))
+            return row.empty_before if row else None
+
+    def set_empty_before(self, ticker: str, interval: str, empty_before: datetime) -> None:
+        """Upserts the `empty_before` sentinel for (ticker, interval)."""
+        with Session(self.engine) as session:
+            try:
+                from sqlalchemy.dialects.sqlite import insert
+                stmt = (
+                    insert(FetchLedger)
+                    .values(ticker=ticker, interval=interval, empty_before=empty_before)
+                    .on_conflict_do_update(
+                        index_elements=['ticker', 'interval'],
+                        set_={'empty_before': empty_before},
+                    )
+                )
+                session.execute(stmt)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Failed to update fetch ledger for {ticker}/{interval}: {e}", exc_info=True)

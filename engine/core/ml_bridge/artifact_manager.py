@@ -26,7 +26,7 @@ class ArtifactManager:
 
         Args:
             strategy_dir (str): The absolute or relative path to the specific 
-                strategy's directory (e.g., 'src/strategies/MyXGBoostStrat').
+                strategy's directory (e.g., 'strategies/MyXGBoostStrat').
             artifacts (Dict[str, Any]): A dictionary containing fitted models, 
                 scalers, or custom state variables generated during training.
 
@@ -37,7 +37,7 @@ class ArtifactManager:
 
         Example:
             >>> my_models = {"xgb_main": fitted_xgb, "scaler": fitted_minmax}
-            >>> ArtifactManager.save_artifacts("src/strategies/StratA", my_models)
+            >>> ArtifactManager.save_artifacts("strategies/StratA", my_models)
         """
         if not artifacts:
             logger.info(f"No artifacts returned for {strategy_dir}. Skipping save.")
@@ -74,7 +74,7 @@ class ArtifactManager:
             IOError: If the file exists but is corrupted or cannot be read.
 
         Example:
-            >>> artifacts = ArtifactManager.load_artifacts("src/strategies/StratA")
+            >>> artifacts = ArtifactManager.load_artifacts("strategies/StratA")
             >>> model = artifacts.get("xgb_main")
         """
         file_path = os.path.join(strategy_dir, ArtifactManager.FILENAME)

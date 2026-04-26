@@ -3,22 +3,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Repo root is two directories up from this file (engine/core/config.py)
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 class Config:
     """Central configuration for the Research Engine."""
-    
+
     # API Settings - Default to localhost for single-machine setups
     # Can be overridden via environment variables for WSL2 or remote setups
     API_HOST = os.getenv("ENGINE_API_HOST", "127.0.0.1")
     API_PORT = int(os.getenv("ENGINE_API_PORT", 8000))
-    
+
     # Redis Message Broker Settings
     REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
     REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
     REDIS_DB = int(os.getenv("REDIS_DB", 0))
-    
+
     FRED_API_KEY = os.getenv("FRED_API_KEY")
-    
-    STRATEGIES_FOLDER = os.getenv("STRATEGIES_FOLDER", "./strategies")
+
+    STRATEGIES_FOLDER = os.getenv(
+        "STRATEGIES_FOLDER",
+        os.path.join(_REPO_ROOT, "strategies")
+    )
     
     @property
     def api_url(self):

@@ -11,7 +11,7 @@ labels with the concrete Python type crossing that boundary.
 ```mermaid
 flowchart TD
     subgraph Entry["Entry Points"]
-        CLI["CLI\nresearch_cli.py / main.py\nBACKTEST|TRAIN|SIGNAL|INIT|SYNC"]
+        CLI["CLI\nCLI.py / CLI.py\nBACKTEST|TRAIN|SIGNAL|INIT|SYNC"]
         API["FastAPI\n/api/v1/jobs\nPOST JobPayloadRequest"]
         GUI["PyQt6 GUI\nModelEngine facade"]
     end
@@ -480,8 +480,8 @@ flowchart LR
 | `numpy.ndarray` (X) | shape `(n_samples, n_features)`, float64, scaled to [-1,1] | `MLBridge.prepare_training_matrix()` | `model.fit_model()` |
 | `numpy.ndarray` (y) | shape `(n_samples,)`, int labels | `model.build_labels()` | `model.fit_model()` |
 | Tearsheet `dict` | scalar metrics + equity_curve, portfolio, bh_portfolio, trade_log | `Tearsheet.calculate_metrics()` | CLI output, GUI charts |
-| `ICResult` | dataclass: mean_ic, ic_ir, ic_series[horizon], quintile_returns, ... | `ICAnalyzer.compute()` | `research_cli.py ic` report, `ConditionalIC` |
-| `ConditionalICResult` | dataclass: bins (sorted RegimeBin list), diagnosis, unconditional_ic | `ConditionalIC.compute()` | `research_cli.py ic-surface` report |
+| `ICResult` | dataclass: mean_ic, ic_ir, ic_series[horizon], quintile_returns, ... | `ICAnalyzer.compute()` | `CLI.py ic` report, `ConditionalIC` |
+| `ConditionalICResult` | dataclass: bins (sorted RegimeBin list), diagnosis, unconditional_ic | `ConditionalIC.compute()` | `CLI.py ic-surface` report |
 
 ---
 

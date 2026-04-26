@@ -82,9 +82,10 @@ class LocalTrainer:
             with open(manifest_path, "r") as f:
                 self.manifest = json.load(f)
         except Exception as e:
+            # TODO: improve logging — add structured exc_info so the full traceback is visible
             raise StrategyError(
                 f"Missing or invalid manifest in {self.strategy_dir}: {e}"
-            )
+            ) from e
 
         self.training_config = {
             **self.DEFAULT_TRAINING_CONFIG,
@@ -1118,8 +1119,12 @@ class LocalTrainer:
             val_slices[ticker] = df_val_t
 
         if not train_X_parts:
+            date_range = (
+                f"{min(train_dates)} -> {max(train_dates)}"
+                if train_dates else "no train dates"
+            )
             raise StrategyError(
-                f"Fold produced no training data [{train_start} -> {train_end}]"
+                f"Fold produced no training data [{date_range}]"
             )
 
         X_train_df = pd.concat(train_X_parts, axis=0)
@@ -1411,4 +1416,5 @@ class LocalTrainer:
         except StrategyError:
             raise
         except Exception as e:
-            raise StrategyError(f"Strategy initialization failed: {e}")
+            # TODO: improve logging — add structured exc_info so the full traceback is visible
+            raise StrategyError(f"Strategy initialization failed: {e}") from e
