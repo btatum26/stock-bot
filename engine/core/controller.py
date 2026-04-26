@@ -11,18 +11,10 @@ from .data_broker.data_broker import DataBroker
 from .workspace import WorkspaceManager
 from .backtester import LocalBacktester
 from .metrics import Tearsheet
-from .optimization.optimizer_core import OptimizerCore
 from .trainer import LocalTrainer
 from .logger import logger
 from .exceptions import StrategyError, ValidationError
 from .config import config
-
-
-# Kill switch for hyperparameter search (Phase A of training).
-# When False, _handle_train skips OptimizerCore entirely and trains
-# directly with the manifest's `hyperparameters` block, ignoring any
-# `parameter_bounds`. Flip back to True to re-enable HPO.
-ENABLE_HPO = False
 
 
 def _parse_dt(value: Optional[str]) -> Optional[datetime]:
@@ -169,7 +161,7 @@ class ApplicationController:
                 payload = JobPayload(**payload)
         except Exception as e:
             logger.error(f"Invalid job payload: {e}", exc_info=True)
-            raise ValidationError(f"Invalid job payload: {e}")
+            raise ValidationError(f"Invalid job payload: {e}") from e
             
         strategy_name = payload.strategy
         assets = payload.assets
@@ -314,56 +306,14 @@ class ApplicationController:
             with open(manifest_path, 'r') as f:
                 manifest = json.load(f)
         except Exception as e:
-            logger.error(f"Failed to load manifest at {manifest_path}: {e}")
-            raise StrategyError(f"Could not load manifest for {strat_path}")
+            # TODO: improve logging — add structured exc_info so the full traceback is visible
+            logger.error(f"Failed to load manifest at {manifest_path}: {e}", exc_info=True)
+            raise StrategyError(f"Could not load manifest for {strat_path}") from e
 
-        # Phase A: Hyperparameter search (if bounds are defined)
-        param_bounds = manifest.get("parameter_bounds", {})
-        has_searchable_bounds = param_bounds and any(
-            isinstance(v, list) and len(v) > 1 for v in param_bounds.values()
-        )
+        optimal_params = manifest.get("hyperparameters", {})
+        logger.info(f"Using manifest hyperparameters: {optimal_params}")
 
-        if has_searchable_bounds and not ENABLE_HPO:
-            logger.info(
-                "Parameter bounds present but HPO is disabled "
-                "(controller.ENABLE_HPO=False). Skipping Phase A."
-            )
-            has_searchable_bounds = False
-
-        if has_searchable_bounds:
-            # TODO: Multi-ticker HPO. For now the optimizer runs on the
-            # first ticker only; its grid-search worker operates on one
-            # shared-memory dataset. Results are directionally useful but
-            # not truly optimal for a pooled model.
-            first_ticker = next(iter(datasets.keys()))
-            dataset_ref = f"{first_ticker}_{interval}"
-            if len(datasets) > 1:
-                logger.warning(
-                    f"Optimizer runs on {first_ticker} only; other tickers "
-                    "are ignored during HPO. (TODO: multi-ticker HPO)"
-                )
-            logger.info("Parameter bounds detected. Running optimizer Phase A.")
-            try:
-                optimizer = OptimizerCore(
-                    strategy_path=strat_path,
-                    dataset_ref=dataset_ref,
-                    manifest=manifest,
-                    ticker=first_ticker,
-                    interval=interval,
-                    start=timeframe.start,
-                    end=timeframe.end,
-                )
-                searched_params = optimizer.discover_params()
-            except Exception as e:
-                logger.error(f"Optimization failed: {e}", exc_info=True)
-                raise StrategyError(f"Optimization failed: {e}")
-            optimal_params = {**manifest.get("hyperparameters", {}), **searched_params}
-            logger.info(f"Optimal parameters: {optimal_params}")
-        else:
-            optimal_params = manifest.get("hyperparameters", {})
-            logger.info("No searchable parameter bounds. Using default hyperparameters.")
-
-        # Phase B: Train with proper data splitting and validation
+        # Train with proper data splitting and validation
         try:
             trainer = LocalTrainer(strat_path)
             # Single-ticker: unwrap to DataFrame for the legacy path.
@@ -377,7 +327,7 @@ class ApplicationController:
             return results
         except Exception as e:
             logger.error(f"Training failed: {e}", exc_info=True)
-            raise StrategyError(f"Training failed: {e}")
+            raise StrategyError(f"Training failed: {e}") from e
 
     def _handle_signal_only(self, strat_path: str, assets: Union[str, List[str]], interval: str, 
                             start: Optional[str], end: Optional[str]):

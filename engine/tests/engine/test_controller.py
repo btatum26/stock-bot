@@ -172,39 +172,6 @@ def test_handle_backtest_partial_failure(mock_exists, mock_get_data, mock_backte
 
 
 # ---------------------------------------------------------------------------
-# _handle_train — dispatches to OptimizerCore.run()
-# ---------------------------------------------------------------------------
-
-@patch("engine.core.controller.OptimizerCore")
-@patch("engine.core.controller.DataBroker.get_data")
-@patch("os.path.exists")
-def test_handle_train_calls_optimizer(mock_exists, mock_get_data, mock_optimizer_cls,
-                                      dummy_strategy, tmp_path):
-    mock_exists.return_value = True
-    mock_get_data.return_value = pd.DataFrame(
-        {"Open": [100.0], "High": [101.0], "Low": [99.0],
-         "Close": [100.0], "Volume": [1000]},
-        index=pd.date_range("2023-01-01", periods=1),
-    )
-
-    mock_optimizer = MagicMock()
-    mock_optimizer.run.return_value = {"best_params": {"window": 14}}
-    mock_optimizer_cls.return_value = mock_optimizer
-
-    controller = ApplicationController(strategies_dir=str(tmp_path))
-    payload = {
-        "strategy": "dummy_strat",
-        "assets": ["AAPL"],
-        "interval": "1d",
-        "mode": ExecutionMode.TRAIN,
-    }
-    result = controller.execute_job(payload)
-
-    mock_optimizer.run.assert_called_once()
-    assert result == {"best_params": {"window": 14}}
-
-
-# ---------------------------------------------------------------------------
 # _handle_signal_only — no data returns error dict
 # ---------------------------------------------------------------------------
 

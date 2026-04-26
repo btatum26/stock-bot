@@ -202,6 +202,22 @@ class DataBroker:
             start, end, db_min, db_max, db_max_date, interval, max_lookback
         )
 
+        # Detect whether this is a backward-gap-only fetch (behind the earliest cached bar).
+        # If so, consult the ledger: if we've already confirmed that range is empty, skip.
+        is_backward_gap = (
+            fetch_from is not None
+            and db_min is not None
+            and fetch_to <= db_min
+        )
+        if is_backward_gap:
+            empty_before = self.db.get_empty_before(ticker, interval)
+            if empty_before is not None and empty_before >= db_min:
+                logger.debug(
+                    f"[{ticker}] Backward gap already confirmed empty before "
+                    f"{empty_before.date()} -- skipping fetch."
+                )
+                fetch_from = None
+
         if fetch_from is not None:
             logger.info(f"[{ticker}] Fetching {interval} gap: "
                         f"{fetch_from.strftime('%Y-%m-%d')} -> {fetch_to.strftime('%Y-%m-%d')}")
@@ -211,6 +227,11 @@ class DataBroker:
                 end=(fetch_to + timedelta(days=1)).strftime('%Y-%m-%d')
             )
             self._insert_dataframe(df_new, ticker, interval)
+            # Record the empty range only when the API responded successfully with no data.
+            # fetch_ohlcv raises on error, so an empty return here means confirmed empty.
+            if is_backward_gap and df_new.empty:
+                logger.info(f"[{ticker}] No historical data before {fetch_to.date()} -- recording in ledger.")
+                self.db.set_empty_before(ticker, interval, fetch_to)
         else:
             logger.debug(f"[{ticker}] {interval} cache is fresh -- serving from DB.")
 
