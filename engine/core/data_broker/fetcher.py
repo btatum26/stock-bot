@@ -1,4 +1,3 @@
-import logging
 import yfinance as yf
 import pandas as pd
 import requests
@@ -6,12 +5,7 @@ import requests_cache
 from datetime import datetime
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from ..config import config
-
-logging.basicConfig(
-    filename='data/ingestion.log', 
-    level=logging.WARNING,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+from ..logger import data_logger as logger
 
 class DataFetcher:
     def __init__(self, av_api_key: str = "YOUR_FREE_KEY"):
@@ -23,7 +17,7 @@ class DataFetcher:
         original_len = len(df)
         df = df.dropna()
         if len(df) < original_len:
-            logging.warning(f"Sanitization dropped {original_len - len(df)} rows containing NaN.")
+            logger.warning(f"Sanitization dropped {original_len - len(df)} rows containing NaN.")
         return df
     
 
@@ -61,7 +55,7 @@ class DataFetcher:
             return self._sanitize_dataframe(df[['timestamp', 'open', 'high', 'low', 'close', 'volume']])
         
         except Exception as e:
-            logging.error(f"Failed to fetch OHLCV for {ticker}: {e}")
+            logger.error(f"Failed to fetch OHLCV for {ticker}: {e}")
             raise e
 
     @retry(wait=wait_exponential(multiplier=2, min=4, max=10), stop=stop_after_attempt(3))
@@ -78,7 +72,7 @@ class DataFetcher:
                 "total_cash": info.get("totalCash")
             }
         except Exception as e:
-            logging.warning(f"YFinance fundamentals failed for {ticker}. Attempting Alpha Vantage fallback. Error: {e}")
+            logger.warning(f"YFinance fundamentals failed for {ticker}. Attempting Alpha Vantage fallback. Error: {e}")
             return self._alpha_vantage_fallback(ticker)
 
     def _alpha_vantage_fallback(self, ticker: str) -> dict:
@@ -94,13 +88,13 @@ class DataFetcher:
                 "total_cash": None
             }
         except Exception as e:
-            logging.error(f"Alpha Vantage fallback failed for {ticker}: {e}")
+            logger.error(f"Alpha Vantage fallback failed for {ticker}: {e}")
             return {}
 
     def fetch_macro_data(self, indicator: str, start: str, end: str) -> pd.DataFrame:
         """Fetches Macro data directly from the official FRED API."""
         if not config.FRED_API_KEY:
-            logging.error("FRED API key not configured. Check your .env and config.")
+            logger.error("FRED API key not configured. Check your .env and config.")
             return pd.DataFrame()
 
         # Official FRED API Endpoint for series observations
@@ -121,7 +115,7 @@ class DataFetcher:
             data = response.json()
 
             if "observations" not in data or not data["observations"]:
-                logging.warning(f"No FRED observations found for {indicator}.")
+                logger.warning(f"No FRED observations found for {indicator}.")
                 return pd.DataFrame()
 
             # Convert JSON observations to a pandas DataFrame
@@ -136,5 +130,5 @@ class DataFetcher:
             return self._sanitize_dataframe(df)
 
         except Exception as e:
-            logging.error(f"Failed to fetch direct FRED data for {indicator}: {e}")
+            logger.error(f"Failed to fetch direct FRED data for {indicator}: {e}")
             return pd.DataFrame()

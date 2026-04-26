@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from .database import Database, OHLCV
 from .fetcher import DataFetcher
+from ..logger import data_logger as logger
 
 class DataBroker:
     def __init__(self):
@@ -132,10 +133,10 @@ class DataBroker:
                         index_elements=['ticker', 'timestamp', 'interval'])
                     session.execute(stmt)
                 session.commit()
-                print(f"[{ticker}] Cached {len(records)} new {interval} bars.")
+                logger.info(f"[{ticker}] Cached {len(records)} new {interval} bars.")
             except Exception as e:
                 session.rollback()
-                print(f"[{ticker}] DB insert failed: {e}")
+                logger.error(f"[{ticker}] DB insert failed: {e}", exc_info=True)
 
     def get_data(self, ticker: str, interval: str, start: Optional[datetime] = None,
                  end: Optional[datetime] = None) -> pd.DataFrame:
@@ -184,7 +185,7 @@ class DataBroker:
 
         # 15-Minute Rule: bypass DB (too short-lived to be worth caching)
         if interval == '15m':
-            print(f"[{ticker}] 15m requested -- bypassing DB.")
+            logger.debug(f"[{ticker}] 15m requested -- bypassing DB.")
             df = self.fetcher.fetch_ohlcv(
                 ticker, interval,
                 start=start.strftime('%Y-%m-%d'),
@@ -202,8 +203,8 @@ class DataBroker:
         )
 
         if fetch_from is not None:
-            print(f"[{ticker}] Fetching {interval} gap: "
-                  f"{fetch_from.strftime('%Y-%m-%d')} -> {fetch_to.strftime('%Y-%m-%d')}")
+            logger.info(f"[{ticker}] Fetching {interval} gap: "
+                        f"{fetch_from.strftime('%Y-%m-%d')} -> {fetch_to.strftime('%Y-%m-%d')}")
             df_new = self.fetcher.fetch_ohlcv(
                 ticker, interval,
                 start=fetch_from.strftime('%Y-%m-%d'),
@@ -211,7 +212,7 @@ class DataBroker:
             )
             self._insert_dataframe(df_new, ticker, interval)
         else:
-            print(f"[{ticker}] {interval} cache is fresh -- serving from DB.")
+            logger.debug(f"[{ticker}] {interval} cache is fresh -- serving from DB.")
 
         # Serve from DB
         with Session(self.db.engine) as session:

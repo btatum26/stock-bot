@@ -1,11 +1,12 @@
 import os
 import pandas as pd
 from sqlalchemy import (
-    create_engine, Column, String, Float, DateTime, Integer, 
+    create_engine, Column, String, Float, DateTime, Integer,
     UniqueConstraint, Index, text, event
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import NullPool
+from ..logger import data_logger as logger
 
 Base = declarative_base()
 
@@ -41,7 +42,7 @@ class Database:
             Base.metadata.create_all(self.engine)
             self.Session = sessionmaker(bind=self.engine)
         except Exception as e:
-            print(f"Database initialization error: {e}")
+            logger.error(f"Database initialization error: {e}", exc_info=True)
             raise
 
     def _set_sqlite_pragma(self, dbapi_connection, connection_record):
@@ -90,7 +91,7 @@ class Database:
                 
                 conn.execute(text("DROP TABLE temp_ohlcv"))
         except Exception as e:
-            print(f"Error bulk saving data: {e}")
+            logger.error(f"Error bulk saving data: {e}", exc_info=True)
             raise
 
     def get_latest_timestamp(self, ticker, interval):
@@ -150,5 +151,5 @@ class Database:
             return df[['Open', 'High', 'Low', 'Close', 'Volume']]
             
         except Exception as e:
-            print(f"Error retrieving data from database: {e}")
+            logger.error(f"Error retrieving data from database: {e}", exc_info=True)
             return pd.DataFrame()

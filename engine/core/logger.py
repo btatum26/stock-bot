@@ -1,39 +1,51 @@
 import logging
+import logging.handlers
 import os
-from datetime import datetime
 
-def setup_logger(name, log_file=None, level=logging.INFO):
-    """Configures a standardized logger for the project."""
-    formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
-    
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    
-    # Avoid duplicate handlers if the logger is retrieved multiple times
-    if not logger.handlers:
-        # Console Handler
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
+# Anchor log dir to this file's location so the path is stable regardless of CWD.
+# In Docker (WORKDIR=/code/engine): resolves to /code/engine/logs/
+_LOG_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs"))
 
-        # File Handler (Only if log_file is provided)
-        if log_file:
-            try:
-                os.makedirs(os.path.dirname(log_file), exist_ok=True)
-                file_handler = logging.FileHandler(log_file)
-                file_handler.setFormatter(formatter)
-                logger.addHandler(file_handler)
-            except Exception as e:
-                print(f"Warning: Could not initialize file logging for {name}: {e}")
+_FMT = "[%(asctime)s] [%(name)s] [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s"
+_DATE_FMT = "%Y-%m-%d %H:%M:%S"
+_formatter = logging.Formatter(_FMT, datefmt=_DATE_FMT)
 
-    return logger
 
-# Global default logger - Console Only
-logger = setup_logger("model-engine")
+def _rotating(filename: str, level: int) -> logging.Handler:
+    os.makedirs(_LOG_DIR, exist_ok=True)
+    h = logging.handlers.RotatingFileHandler(
+        os.path.join(_LOG_DIR, filename),
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    h.setLevel(level)
+    h.setFormatter(_formatter)
+    return h
 
-# Specialized Daemon Logger - Console + logs/daemon.log
-# Used for detailed tracking of jobs, scheduling, and error traces
-daemon_logger = setup_logger(
-    "model-engine.daemon", 
-    log_file=os.path.join("logs", "daemon.log")
-)
+
+def _console() -> logging.Handler:
+    h = logging.StreamHandler()
+    h.setLevel(logging.INFO)
+    h.setFormatter(_formatter)
+    return h
+
+
+def _configure():
+    root = logging.getLogger("model-engine")
+    if root.handlers:
+        return  # already configured (tests, re-import, etc.)
+    root.setLevel(logging.DEBUG)
+    root.propagate = False  # don't leak to the Python root logger
+    root.addHandler(_console())
+    root.addHandler(_rotating("engine.log", logging.DEBUG))
+    root.addHandler(_rotating("errors.log", logging.WARNING))
+
+
+_configure()
+
+# Public loggers — import these instead of calling getLogger() directly.
+# Child loggers inherit all handlers from model-engine automatically.
+logger = logging.getLogger("model-engine")
+daemon_logger = logging.getLogger("model-engine.daemon")
+data_logger = logging.getLogger("model-engine.data")
