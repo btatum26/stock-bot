@@ -75,6 +75,14 @@ class ModelEngine:
     # ------------------------------------------------------------------
 
     def _strategy_dir(self, name: str) -> str:
+        if (
+            not name
+            or "/" in name
+            or "\\" in name
+            or name in {".", ".."}
+            or os.path.basename(name) != name
+        ):
+            raise StrategyError(f"Invalid strategy name: {name!r}")
         return os.path.join(self.workspace_dir, name)
 
     def _load_manifest(self, strategy_name: str) -> dict:
@@ -213,7 +221,13 @@ class ModelEngine:
                     f"Archive manifest is missing required keys: {missing}"
                 )
 
-            zf.extractall(dest_dir)
+            dest_abs = os.path.abspath(dest_dir)
+            for member in names:
+                target = os.path.abspath(os.path.join(dest_abs, member))
+                if os.path.commonpath([dest_abs, target]) != dest_abs:
+                    raise ValidationError(f"Unsafe archive path: {member}")
+
+            zf.extractall(dest_abs)
 
         return strategy_name
 

@@ -11,7 +11,7 @@ client = TestClient(app)
 @pytest.fixture
 def mock_strategy_env(dummy_strategy):
     """
-    Patches the global STRATEGIES_DIR in main.py to point to the temporary 
+    Patches the global STRATEGIES_DIR in daemon/main.py to point to the temporary
     directory created by the dummy_strategy fixture. This ensures the Fail Fast 
     validation passes during testing.
     """
@@ -37,6 +37,35 @@ def test_submit_invalid_enum(mock_redis_client):
     }
     response = client.post("/api/v1/jobs", json=payload)
     assert response.status_code == 422
+
+
+def test_submit_invalid_multi_asset_mode(mock_redis_client):
+    """Ensure Pydantic catches invalid multi-asset mode values."""
+    payload = {
+        "strategy": "dummy_strat",
+        "assets": ["AAPL"],
+        "interval": "1d",
+        "mode": "BACKTEST",
+        "multi_asset_mode": "MAGIC",
+    }
+    response = client.post("/api/v1/jobs", json=payload)
+    assert response.status_code == 422
+
+
+@patch("daemon.main.task_queue")
+def test_submit_rejects_strategy_traversal(mock_task_queue, mock_redis_client):
+    """Ensure strategy names cannot escape STRATEGIES_DIR."""
+    payload = {
+        "strategy": "../outside",
+        "assets": ["AAPL"],
+        "interval": "1d",
+        "mode": "BACKTEST",
+    }
+    response = client.post("/api/v1/jobs", json=payload)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid strategy name."
+    mock_task_queue.enqueue.assert_not_called()
+
 
 @patch("daemon.main.task_queue")
 def test_submit_invalid_strategy_fails_fast(mock_task_queue, mock_redis_client, mock_strategy_env):
@@ -140,6 +169,22 @@ def test_cancel_queued_job(mock_redis_client):
     assert mock_redis_client.hget(f"job:{job_id}", "status") == "CANCELLED"
     assert mock_redis_client.zscore("jobs:status:QUEUED", job_id) is None
     assert mock_redis_client.zscore("jobs:status:CANCELLED", job_id) is not None
+
+
+def test_cancel_running_job_updates_status_indexes(mock_redis_client):
+    """Verify a running job moves from RUNNING to CANCEL_REQUESTED indexes."""
+    job_id = "cancel-running-test-123"
+
+    mock_redis_client.hset(f"job:{job_id}", mapping={"status": "RUNNING"})
+    mock_redis_client.zadd("jobs:status:RUNNING", {job_id: 100.0})
+
+    response = client.delete(f"/api/v1/jobs/{job_id}")
+    assert response.status_code == 200
+    assert response.json()["status"] == "CANCEL_REQUESTED"
+
+    assert mock_redis_client.hget(f"job:{job_id}", "status") == "CANCEL_REQUESTED"
+    assert mock_redis_client.zscore("jobs:status:RUNNING", job_id) is None
+    assert mock_redis_client.zscore("jobs:status:CANCEL_REQUESTED", job_id) is not None
 
 
 def test_get_strategies_endpoint(mock_strategy_env):

@@ -10,7 +10,7 @@ from rq import Queue
 from rq.job import Job
 from rq.exceptions import NoSuchJobError
 
-from engine.core.controller import ExecutionMode
+from engine.core.controller import ExecutionMode, MultiAssetMode
 from .models import JobRegistry, JobStatus
 from engine.core.logger import logger, daemon_logger
 from engine.core.config import config
@@ -59,7 +59,24 @@ class JobPayloadRequest(BaseModel):
     interval: str
     mode: ExecutionMode
     timeframe: Optional[TimeframeRequest] = None
-    multi_asset_mode: Optional[str] = "BATCH"
+    multi_asset_mode: MultiAssetMode = MultiAssetMode.BATCH
+
+
+def _strategy_path(strategy_name: str) -> str:
+    """Resolve a strategy name under STRATEGIES_DIR and reject traversal."""
+    if (
+        not strategy_name
+        or "/" in strategy_name
+        or "\\" in strategy_name
+        or strategy_name in {".", ".."}
+        or os.path.basename(strategy_name) != strategy_name
+    ):
+        raise HTTPException(status_code=400, detail="Invalid strategy name.")
+    root = os.path.abspath(STRATEGIES_DIR)
+    candidate = os.path.abspath(os.path.join(root, strategy_name))
+    if os.path.commonpath([root, candidate]) != root:
+        raise HTTPException(status_code=400, detail="Invalid strategy path.")
+    return candidate
 
 @app.get("/health")
 def health_check():
@@ -96,7 +113,7 @@ def list_strategies():
                 except json.JSONDecodeError:
                     daemon_logger.warning(f"Malformed manifest.json in {entry.name}, skipping.")
                 except Exception as e:
-                    daemon_logger.error(f"Error reading manifest for {entry.name}: {e}")
+                    daemon_logger.error(f"Error reading manifest for {entry.name}: {e}", exc_info=True)
                     
     return strategies
 
@@ -114,7 +131,7 @@ def submit_job(payload: JobPayloadRequest):
             raise HTTPException(status_code=503, detail="Services not initialized")
             
         # Fail Fast Validation
-        target_strat_path = os.path.join(STRATEGIES_DIR, payload.strategy)
+        target_strat_path = _strategy_path(payload.strategy)
         if not os.path.exists(target_strat_path) or not os.path.isdir(target_strat_path):
             raise HTTPException(status_code=400, detail=f"Strategy '{payload.strategy}' does not exist.")
             
@@ -222,7 +239,11 @@ def cancel_job(job_id: str):
         
     elif current_status == JobStatus.RUNNING.value:
         # Flag the job for cooperative cancellation by the worker
-        redis_client.hset(job_key, "status", "CANCEL_REQUESTED")
+        pipe = redis_client.pipeline()
+        pipe.hset(job_key, "status", JobStatus.CANCEL_REQUESTED.value)
+        pipe.zrem(f"jobs:status:{JobStatus.RUNNING.value}", job_id)
+        pipe.zadd(f"jobs:status:{JobStatus.CANCEL_REQUESTED.value}", {job_id: time.time()})
+        pipe.execute()
         return {"job_id": job_id, "status": "CANCEL_REQUESTED", "message": "Kill signal sent to worker."}
         
     return {"job_id": job_id, "status": current_status}

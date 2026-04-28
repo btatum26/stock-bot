@@ -169,6 +169,15 @@ class ApplicationController:
         mode = payload.mode
         multi_asset_mode = payload.multi_asset_mode
 
+        if (
+            not strategy_name
+            or "/" in strategy_name
+            or "\\" in strategy_name
+            or strategy_name in {".", ".."}
+            or os.path.basename(strategy_name) != strategy_name
+        ):
+            raise StrategyError(f"Invalid strategy name: {strategy_name!r}")
+
         strat_path = os.path.normpath(os.path.join(self.strategies_dir, strategy_name))
         if not os.path.exists(strat_path):
             logger.error(f"Strategy path not found: {strat_path}")
@@ -210,7 +219,7 @@ class ApplicationController:
                          start: Optional[str], end: Optional[str], multi_asset_mode: MultiAssetMode):
         """Executes the backtesting pipeline using batch processing."""
         if len(assets) > 1 and multi_asset_mode == MultiAssetMode.PORTFOLIO:
-            raise NotImplementedError("PORTFOLIO mode is not yet supported.")
+            raise NotImplementedError("API PORTFOLIO mode is not implemented; use the CLI/GUI portfolio path.")
 
         strategy_name = os.path.basename(strat_path)
         n_trials = 1
@@ -306,7 +315,6 @@ class ApplicationController:
             with open(manifest_path, 'r') as f:
                 manifest = json.load(f)
         except Exception as e:
-            # TODO: improve logging — add structured exc_info so the full traceback is visible
             logger.error(f"Failed to load manifest at {manifest_path}: {e}", exc_info=True)
             raise StrategyError(f"Could not load manifest for {strat_path}") from e
 

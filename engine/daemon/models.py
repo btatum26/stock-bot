@@ -6,6 +6,7 @@ from typing import Optional
 class JobStatus(str, enum.Enum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"

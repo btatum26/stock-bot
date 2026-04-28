@@ -12,38 +12,51 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from context import Context
+from engine.core.controller import SignalModel
 
-class SignalModel:
-    def generate_signals(self, df: pd.DataFrame, ctx: Context, artifacts: dict = None) -> pd.Series:
+class ExampleStrategy(SignalModel):
+    def train(self, df: pd.DataFrame, ctx: Context, params: dict):
+        return {}
+
+    def generate_signals(self, df: pd.DataFrame, ctx: Context, params: dict, artifacts: dict = None) -> pd.Series:
         return pd.Series(1.0, index=df.index)
 """
 
 MISSING_CLASS_CODE = """
 import pandas as pd
 from context import Context
+from engine.core.controller import SignalModel
 
-# Forgot to name it SignalModel
+# Forgot to inherit from SignalModel
 class MyStrategy:
-    def generate_signals(self, df, ctx, artifacts):
+    def generate_signals(self, df, ctx, params, artifacts):
         pass
 """
 
 MISSING_METHOD_CODE = """
 import pandas as pd
 from context import Context
+from engine.core.controller import SignalModel
 
-class SignalModel:
+class ExampleStrategy(SignalModel):
+    def train(self, df, ctx, params):
+        return {}
+
     # Typo in the method name
-    def gen_signals(self, df, ctx, artifacts):
+    def gen_signals(self, df, ctx, params, artifacts):
         pass
 """
 
 MISSING_CONTEXT_CODE = """
 import pandas as pd
 import numpy as np
+from engine.core.controller import SignalModel
 
-class SignalModel:
-    def generate_signals(self, df, ctx, artifacts):
+class ExampleStrategy(SignalModel):
+    def train(self, df, ctx, params):
+        return {}
+
+    def generate_signals(self, df, ctx, params, artifacts):
         pass
 """
 
@@ -51,9 +64,13 @@ MALICIOUS_IMPORT_CODE = """
 import pandas as pd
 import os
 from context import Context
+from engine.core.controller import SignalModel
 
-class SignalModel:
-    def generate_signals(self, df, ctx, artifacts):
+class ExampleStrategy(SignalModel):
+    def train(self, df, ctx, params):
+        return {}
+
+    def generate_signals(self, df, ctx, params, artifacts):
         os.system("echo 'boom'")
 """
 
@@ -61,36 +78,49 @@ MALICIOUS_FROM_IMPORT_CODE = """
 import pandas as pd
 from subprocess import Popen
 from context import Context
+from engine.core.controller import SignalModel
 
-class SignalModel:
-    def generate_signals(self, df, ctx, artifacts):
+class ExampleStrategy(SignalModel):
+    def train(self, df, ctx, params):
+        return {}
+
+    def generate_signals(self, df, ctx, params, artifacts):
         pass
 """
 
 SYNTAX_ERROR_CODE = """
 import pandas as pd
 from context import Context
+from engine.core.controller import SignalModel
 
-class SignalModel
-    def generate_signals(self, df, ctx, artifacts):
+class ExampleStrategy(SignalModel)
+    def generate_signals(self, df, ctx, params, artifacts):
         pass
 """
 
 SUBMODULE_ALLOWED_CODE = """
 import pandas.core.common as pd_common
 from context import Context
+from engine.core.controller import SignalModel
 
-class SignalModel:
-    def generate_signals(self, df, ctx, artifacts):
+class ExampleStrategy(SignalModel):
+    def train(self, df, ctx, params):
+        return {}
+
+    def generate_signals(self, df, ctx, params, artifacts):
         pass
 """
 
 SUBMODULE_DENIED_CODE = """
 import urllib.request
 from context import Context
+from engine.core.controller import SignalModel
 
-class SignalModel:
-    def generate_signals(self, df, ctx, artifacts):
+class ExampleStrategy(SignalModel):
+    def train(self, df, ctx, params):
+        return {}
+
+    def generate_signals(self, df, ctx, params, artifacts):
         pass
 """
 
@@ -106,7 +136,7 @@ def test_validator_passes_valid_code():
     assert validator.has_generate_signals is True
 
 def test_validator_catches_missing_class():
-    """Verifies the validator enforces the SignalModel class name."""
+    """Verifies the validator enforces a SignalModel subclass."""
     validator = StrategyValidator()
     with pytest.raises(StrategyValidationError, match="Missing required class: `class SignalModel:`"):
         validator.validate(MISSING_CLASS_CODE)

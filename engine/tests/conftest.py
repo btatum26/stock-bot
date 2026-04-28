@@ -6,9 +6,11 @@ import pandas as pd
 import fakeredis
 from unittest.mock import patch
 
-# Ensure engine root is on sys.path so `engine` and `daemon` packages are importable
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # engine root
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))  # src/ for engine package
+# Ensure repo and engine roots are importable in local and Docker test runs.
+_ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_ROOT = os.path.dirname(_ENGINE_ROOT)
+sys.path.insert(0, _ENGINE_ROOT)
+sys.path.insert(0, _REPO_ROOT)
 
 # RQ's scheduler uses multiprocessing.get_context('fork') at import time,
 # which is unavailable on Windows. Patch it before importing rq.
@@ -38,7 +40,7 @@ def mock_redis_client():
     """
     Provides a FakeRedis client for testing.
     
-    Patches the global redis_client in main.py. The tasks.py worker now 
+    Patches the global redis_client in daemon/main.py. The tasks.py worker now
     gets its connection dynamically from the RQ job, so it no longer needs 
     to be patched globally here.
     """
@@ -107,7 +109,7 @@ def dummy_strategy(tmp_path):
     """
     Generates a temporary, fully-formed strategy directory.
     
-    Automatically patches the STRATEGIES_DIR in the API to point to this 
+    Automatically patches the STRATEGIES_DIR in daemon/main.py to point to this
     temporary path, allowing the 'Fail Fast' validation to succeed during testing.
     """
     strat_dir = tmp_path / "dummy_strat"

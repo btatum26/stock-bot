@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import traceback
+import time
 import redis
 from redis.exceptions import WatchError
 from rq import get_current_job
@@ -18,6 +19,26 @@ from engine.core.logger import daemon_logger
 # 1MB limit in bytes
 MAX_ARTIFACT_SIZE_BYTES = 1024 * 1024 
 ARTIFACT_DIR = os.path.join(root_dir, "artifacts")
+
+
+def _status_values() -> list[str]:
+    return [status.value for status in JobStatus]
+
+
+def _transition_status(redis_client, job_id: str, status: JobStatus, progress: str | None = None, **extra) -> None:
+    """Move a job hash and status indexes atomically."""
+    job_key = f"job:{job_id}"
+
+    mapping = {"status": status.value, **extra}
+    if progress is not None:
+        mapping["progress"] = progress
+
+    pipe = redis_client.pipeline()
+    pipe.hset(job_key, mapping=mapping)
+    for value in _status_values():
+        pipe.zrem(f"jobs:status:{value}", job_id)
+    pipe.zadd(f"jobs:status:{status.value}", {job_id: time.time()})
+    pipe.execute()
 
 def safe_commit_results(redis_client, job_id: str, result_str: str) -> bool:
     """
@@ -37,7 +58,7 @@ def safe_commit_results(redis_client, job_id: str, result_str: str) -> bool:
             current_status = pipe.hget(job_key, "status")
             
             # Evaluate if the user hit Cancel while we were running
-            if current_status in [JobStatus.CANCELLED.value, "CANCEL_REQUESTED"]:
+            if current_status in [JobStatus.CANCELLED.value, JobStatus.CANCEL_REQUESTED.value]:
                 daemon_logger.info(f"Worker finished, but Job {job_id} was cancelled. Dropping artifacts.")
                 pipe.unwatch()
                 return False
@@ -65,6 +86,9 @@ def safe_commit_results(redis_client, job_id: str, result_str: str) -> bool:
                 "progress": "100.0",
                 "artifact_path": artifact_value
             })
+            for value in _status_values():
+                pipe.zrem(f"jobs:status:{value}", job_id)
+            pipe.zadd(f"jobs:status:{JobStatus.COMPLETED.value}", {job_id: time.time()})
             
             # Execute fires the pipeline atomically
             pipe.execute()
@@ -79,7 +103,7 @@ def safe_commit_results(redis_client, job_id: str, result_str: str) -> bool:
             return False
             
         except Exception as e:
-            daemon_logger.error(f"Failed to commit results for {job_id}: {e}")
+            daemon_logger.error(f"Failed to commit results for {job_id}: {e}", exc_info=True)
             pipe.unwatch()
             raise e
 
@@ -97,16 +121,13 @@ def process_job(job_id: str, payload: dict):
         
         # 1. EARLY EXIT CHECK: Must happen BEFORE overwriting status
         current_status = redis_client.hget(job_key, "status")
-        if current_status == "CANCEL_REQUESTED":
-            redis_client.hset(job_key, "status", JobStatus.CANCELLED.value)
+        if current_status == JobStatus.CANCEL_REQUESTED.value:
+            _transition_status(redis_client, job_id, JobStatus.CANCELLED)
             daemon_logger.info(f"Job {job_id} cancelled before execution.")
             return
 
         # 2. UPDATE STATE: We are cleared to compute
-        redis_client.hset(job_key, mapping={
-            "status": JobStatus.RUNNING.value,
-            "progress": "10.0"
-        })
+        _transition_status(redis_client, job_id, JobStatus.RUNNING, progress="10.0")
 
         controller = ApplicationController()
         
@@ -115,7 +136,7 @@ def process_job(job_id: str, payload: dict):
         
         result = controller.execute_job(payload)
         
-        result_str = json.dumps(result) if result else ""
+        result_str = json.dumps(result or {}, default=str)
 
         safe_commit_results(redis_client, job_id, result_str)
         
@@ -124,8 +145,5 @@ def process_job(job_id: str, payload: dict):
         daemon_logger.error(f"Job {job_id} failed: {e}", exc_info=True)
         
         current_status = redis_client.hget(job_key, "status")
-        if current_status not in [JobStatus.CANCELLED.value, "CANCEL_REQUESTED"]:
-            redis_client.hset(job_key, mapping={
-                "status": JobStatus.FAILED.value,
-                "error_log": error_log
-            })
+        if current_status not in [JobStatus.CANCELLED.value, JobStatus.CANCEL_REQUESTED.value]:
+            _transition_status(redis_client, job_id, JobStatus.FAILED, error_log=error_log)

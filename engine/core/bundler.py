@@ -1,6 +1,6 @@
+import ast
 import os
 import zipfile
-import ast
 from typing import Set
 
 class StrategyValidationError(Exception):
@@ -14,14 +14,30 @@ class StrategyValidator(ast.NodeVisitor):
     required classes and methods.
     """
     
-    # The Strict Allowlist: Base modules allowed in a user strategy.
+    # Broad allowlist for project-supported strategy code plus local helpers.
     ALLOWED_MODULES: Set[str] = {
-        'pandas', 
-        'numpy', 
-        'typing', 
-        'math', 
-        'datetime',
-        'context' # Our auto-generated context
+        "pandas",
+        "numpy",
+        "typing",
+        "math",
+        "datetime",
+        "context",
+        "engine",
+        "xgboost",
+        "sklearn",
+        "regime",
+        "confirmations",
+    }
+
+    BLOCKED_MODULES: Set[str] = {
+        "os",
+        "sys",
+        "subprocess",
+        "shutil",
+        "socket",
+        "pathlib",
+        "urllib",
+        "requests",
     }
 
     def __init__(self):
@@ -37,7 +53,7 @@ class StrategyValidator(ast.NodeVisitor):
         # Extract the root package (e.g., 'pandas' from 'pandas.core')
         root_module = module_name.split('.')[0]
         
-        if root_module not in self.ALLOWED_MODULES:
+        if root_module in self.BLOCKED_MODULES or root_module not in self.ALLOWED_MODULES:
             raise StrategyValidationError(
                 f"Security Violation on line {lineno}: "
                 f"Importing '{root_module}' is not permitted. Allowed modules: {', '.join(self.ALLOWED_MODULES)}"
@@ -64,7 +80,11 @@ class StrategyValidator(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef):
         """Intercepts class definitions to find SignalModel and its methods."""
-        if node.name == "SignalModel":
+        base_names = {
+            getattr(base, "id", None) or getattr(base, "attr", None)
+            for base in node.bases
+        }
+        if node.name == "SignalModel" or "SignalModel" in base_names:
             self.has_signal_model = True
             
             # Scan the body of the class for the required method
@@ -94,7 +114,7 @@ class StrategyValidator(ast.NodeVisitor):
             raise StrategyValidationError("Missing required import: `from context import Context`")
         
         if not self.has_signal_model:
-            raise StrategyValidationError("Missing required class: `class SignalModel:`")
+            raise StrategyValidationError("Missing required class: `class SignalModel:` or SignalModel subclass.")
             
         if not self.has_generate_signals:
             raise StrategyValidationError("Missing required method: `def generate_signals(self, df, ctx, artifacts):` inside SignalModel")
@@ -119,7 +139,6 @@ class Bundler:
             FileNotFoundError: If core files are missing.
             StrategyValidationError: If model.py contains malicious imports or lacks required structure.
         """
-        # Verify all required files exist
         required_files = ["manifest.json", "context.py", "model.py"]
         for file in required_files:
             if not os.path.exists(os.path.join(strategy_dir, file)):
@@ -131,7 +150,12 @@ class Bundler:
             source_code = f.read()
             
         validator = StrategyValidator()
-        validator.validate(source_code) # Throws StrategyValidationError if it fails
+        validator.validate(source_code)
+
+        # Runtime contract check: the strategy must import and expose a concrete
+        # engine.core.controller.SignalModel subclass, not just a matching name.
+        from .backtester import LocalBacktester
+        LocalBacktester(strategy_dir)._load_user_model_and_context()
         
         # Create the Bundle
         strat_name = os.path.basename(os.path.normpath(strategy_dir))
@@ -139,8 +163,14 @@ class Bundler:
         bundle_path = os.path.join(output_dir, f"{strat_name}.strat")
         
         with zipfile.ZipFile(bundle_path, 'w', zipfile.ZIP_DEFLATED) as bundle:
-            for file in required_files:
-                filepath = os.path.join(strategy_dir, file)
-                bundle.write(filepath, arcname=file) 
+            bundle.write(os.path.join(strategy_dir, "manifest.json"), arcname="manifest.json")
+            for root, dirs, files in os.walk(strategy_dir):
+                dirs[:] = [d for d in dirs if d != "__pycache__"]
+                for filename in files:
+                    if not filename.endswith(".py"):
+                        continue
+                    filepath = os.path.join(root, filename)
+                    arcname = os.path.relpath(filepath, strategy_dir)
+                    bundle.write(filepath, arcname=arcname)
                     
         return bundle_path
