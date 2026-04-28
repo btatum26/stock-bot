@@ -1,0 +1,75 @@
+{
+    "features": [
+        {
+            "id": "MovingAverage",
+            "params": {
+                "period": 50,
+                "type": "EMA",
+                "normalize": "pct_distance"
+            }
+        },
+        {
+            "id": "MovingAverage",
+            "params": {
+                "period": 20,
+                "type": "EMA",
+                "normalize": "pct_distance"
+            }
+        },
+        {
+            "id": "MovingAverage",
+            "params": {
+                "period": 200,
+                "type": "EMA",
+                "normalize": "pct_distance"
+            }
+        },
+        {
+            "id": "RSI",
+            "params": {
+                "period": 54,
+                "overbought": 70.0,
+                "oversold": 30.0,
+                "normalize": "none"
+            }
+        },
+        {
+            "id": "AverageTrueRange",
+            "params": {
+                "period": 21,
+                "normalize": "pct_distance"
+            }
+        },
+        {
+            "id": "YearlyCycle",
+            "params": {}
+        }
+    ],
+    "is_ml": true,
+    "hyperparameters": {
+        "stop_loss": 0.1,
+        "take_profit": 1000.0,
+        "n_estimators": 300,
+        "max_depth": 3,
+        "min_child_weight": 70,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 1.75,
+        "subsample": 0.65,
+        "reg_alpha": 0.1,
+        "gamma": 0.02,
+        "lookforward": 15,
+        "up_threshold": 0.1,
+        "down_threshold": -0.01,
+        "entry_threshold": 0.46,
+        "exit_threshold": 0.3
+    },
+    "parameter_bounds": {
+        "stop_loss": [
+            0.01,
+            0.1
+        ]
+    },
+    "training": {
+        "price_normalization": "log_returns"
+    }
+}

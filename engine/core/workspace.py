@@ -24,7 +24,7 @@ class WorkspaceManager:
         Args:
             strategy_dir (str): The directory path of the active strategy.
             template_dir (str, optional): The directory path containing Jinja2 templates. 
-                Defaults to "src/engine/templates".
+                Defaults to "engine/core/templates".
         """
         self.strategy_dir = strategy_dir
         self.manifest_path = os.path.join(strategy_dir, "manifest.json")

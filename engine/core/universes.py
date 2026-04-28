@@ -1,6 +1,7 @@
 """Hardcoded ticker universes for multi-ticker training.
 
-# TODO: Replace static presets with an auto-sync source. Options:
+# NOTE: Static presets are survivor-biased snapshots. Future work should replace
+# them with an auto-sync source. Options:
 #   - Scrape Wikipedia for S&P 500 / Nasdaq-100 / Dow constituents
 #   - Pull from IEX Cloud / Polygon / yfinance index components
 #   - Maintain a scheduled CSV refresh job under data/universes/

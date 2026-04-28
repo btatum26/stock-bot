@@ -1,0 +1,17 @@
+{
+    "features": [
+        {"id": "AverageTrueRange", "params": {"period": 14}},
+        {"id": "SMA", "params": {"period": 50}}
+    ],
+    "hyperparameters": {
+        "pc_ratio_lookback": 5,
+        "iv_skew_lookback": 60,
+        "unusual_vol_lookback": 20,
+        "rebalance_freq_days": 5,
+        "long_only": true
+    },
+    "parameter_bounds": {},
+    "compression_mode": "clip",
+    "is_ml": false,
+    "cross_sectional": true
+}

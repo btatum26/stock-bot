@@ -1,0 +1,25 @@
+{
+    "features": [
+        {
+            "id": "HYSpread",
+            "params": {}
+        },
+        {
+            "id": "NFCI",
+            "params": {}
+        },
+        {
+            "id": "VIXTermStructure",
+            "params": {}
+        }
+    ],
+    "hyperparameters": {
+        "credit_spread_lookback": 63,
+        "nfci_lookback_weeks": 26,
+        "vix_ratio_bull": 0.9,
+        "vix_ratio_bear": 1.05
+    },
+    "parameter_bounds": {},
+    "compression_mode": "clip",
+    "is_ml": false
+}

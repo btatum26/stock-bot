@@ -1,7 +1,7 @@
 # Research Engine — Architecture & Design
 
 A reference document describing every component of the engine (the `engine/` package and the
-top-level `strategies/` workspace). The PyQt6 charting GUI under `src/` is deliberately
+top-level `strategies/` workspace). The PyQt6 charting GUI under `gui/` is deliberately
 excluded; this doc covers only the backtesting / training / signal-generation backend and
 the strategies it executes.
 
@@ -44,7 +44,6 @@ Key design choices:
 ```
 stock_bot/
 ├── engine/                   # Research engine (this doc)
-│   ├── main.py               # CLI entry (BACKTEST / TRAIN / SIGNAL / INIT / SYNC)
 │   ├── core/                 # Engine library
 │   │   ├── analytics/        # Phase 1 IC analysis (ic_analyzer, macro_fetcher, conditional_ic, report)
 │   │   ├── diagnostics/      # Phase 0 diagnostic tools (trial counter, DSR)
@@ -59,7 +58,7 @@ stock_bot/
 │   ├── consolidation_breakout/
 │   ├── ml_XGBoost/
 │   ├── ml_regime_hybrid/
-│   └── volitility_regime_identifier/
+│   └── volitility_regime_identifier/  # existing misspelled folder name retained
 └── CLI.py           # LLM-facing CLI for strategy authoring
 ```
 
@@ -275,7 +274,7 @@ user code can write `ctx.features.RSI_14` instead of `df["RSI_14"]`. Multi-outpu
 `MACD_SIGNAL`, `MACD_HIST`).
 
 **Never edit `context.py` by hand** — run `CLI.py sync <name>` (or
-`python main.py SYNC --strategy <name>`) after any manifest change and the file is
+`uv run python CLI.py sync <name>`) after any manifest change and the file is
 regenerated from scratch.
 
 ### 4.3 `model.py`
@@ -610,7 +609,7 @@ and (b) `controller.ENABLE_HPO` is `True`.
 - Objective: Sharpe ratio of a T+1-executed strategy signal over the full dataset. The
   objective matches `Tearsheet.calculate_metrics` so optimizer and evaluator agree.
 - **Known limitation:** HPO currently runs on the first ticker only even when training
-  is multi-ticker — marked as a TODO. HPO is also disabled by default
+  is multi-ticker. HPO is also disabled by default
   (`ENABLE_HPO = False`) pending further work.
 
 Optuna results are merged with the manifest's `hyperparameters` dict before Phase B
@@ -632,7 +631,7 @@ training begins.
   Redis (status `QUEUED`), and enqueues `tasks.process_job` on the `default` RQ queue.
 - `GET /api/v1/jobs/{job_id}` — polls the job's Redis hash for `status`, `progress`, and
   `artifact_path`.
-- `POST /api/v1/jobs/{job_id}/cancel` — sets status to `CANCEL_REQUESTED`; workers check
+- `DELETE /api/v1/jobs/{job_id}` — sets running jobs to `CANCEL_REQUESTED`; workers check
   this before starting and at commit time.
 
 ### 11.2 RQ worker
@@ -654,7 +653,7 @@ is the actual unit of work:
 
 [engine/daemon/models.py](engine/daemon/models.py):
 
-- `JobStatus` — `QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`.
+- `JobStatus` — `QUEUED -> RUNNING -> COMPLETED | FAILED | CANCEL_REQUESTED -> CANCELLED`.
 - `JobRegistry` — Pydantic model with `job_id` (UUID), `strategy_name`, `status`,
   `progress`, `parameters`, `artifact_path`, `error_log`.
 
@@ -676,7 +675,7 @@ Uses the same T+1 execution model but adds:
 - **Optional rebalancing on signal strength** (disabled by default).
 
 Currently accessed through the GUI's portfolio panel; `_handle_backtest` in the controller
-still raises `NotImplementedError` for `PORTFOLIO` mode via the CLI path.
+still raises `NotImplementedError` for API `PORTFOLIO` mode. Use the CLI/GUI portfolio path for portfolio simulations.
 
 ---
 
@@ -686,7 +685,7 @@ still raises `NotImplementedError` for `PORTFOLIO` mode via the CLI path.
 (`MEGA_CAP_TECH`, `DOW_30`, `SECTOR_ETFS`, `LIQUID_ETFS`, `SEMICONDUCTORS`,
 `FINANCIALS_LARGE`, `HEALTHCARE_PHARMA`, etc.) that can be passed via
 `CLI.py`'s `--universe <NAME>` flag to expand into a ticker list. Flagged as a
-TODO because the current lists are survivor-biased — they're frozen snapshots of current
+This remains future work because the current lists are survivor-biased — they're frozen snapshots of current
 index members rather than point-in-time constituents.
 
 ---
@@ -1099,7 +1098,7 @@ Illustrative examples from [strategies/](strategies/):
 - **[consolidation_breakout](strategies/consolidation_breakout/)** — rule-based, uses
   ATR + two SMAs + Volume + `TICKER_COMPARE` (cross-asset feature comparing against SPY).
   Large continuous `parameter_bounds` — an ideal HPO candidate.
-- **[volitility_regime_identifier](strategies/volitility_regime_identifier/)** —
+- **[volitility_regime_identifier](strategies/volitility_regime_identifier/)** — existing misspelled directory name retained for compatibility.
   rule-based, volatility-regime classifier using EMAs + ATR + YearlyCycle + S/R.
 - **[ml_XGBoost](strategies/ml_XGBoost/)** — `is_ml: true`. Normalized MAs + RSI + ATR
   + YearlyCycle as features; `price_normalization: log_returns`; XGBoost hyperparameters

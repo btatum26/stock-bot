@@ -16,39 +16,33 @@ data/*.db-wal
 data/*.db-journal
 data/*.sqlite
 
-# Feature Sets
+# Feature sets and generated strategy outputs
 feature_sets/
-*.json
+strategies/**/artifacts.joblib
+strategies/**/diagnostics.json
+strategies/**/gui_prefs.json
+strategies/**/ic_report.txt
+strategies/**/ic_surface_*.txt
 
-# Temporary UI
-# run_gui.py
-# src/gui.py
+# Temporary UI/scripts
 test_levels.py
 extract_tickers.py
 
-
-# Python
-__pycache__/
+# Python tooling
 .pytest_cache/
-*.py[cod]
-*$py.class
-.venv/
+.pytest-tmp/
 .env
 
-# Project Specific
+# Project-specific generated state
 plans/
-data/
 *.db
+logs/
+exports/
+yfinance.cache
 
 # Gemini / AI Agents
 .gemini/
 .geminiignore
 GEMINI.md
 .claudeignore
-CLAUDE.md
 .claude/
-
-logs/
-exports/
-
-yfinance.cache

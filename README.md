@@ -1,109 +1,84 @@
 # Stock Bot Pro
 
-A quantitative finance platform for market visualization, strategy development, backtesting, and optimization.
+Quantitative finance workspace for market visualization, strategy development,
+backtesting, training, and signal generation.
 
-## Overview
+## Current Layout
 
-The project has two layers that work together:
-
-- **GUI** (`src/`, `stock_bot.py`) — PyQt6 desktop app for charting, indicator overlays, and visual signal exploration
-- **Research Engine** (`engine/`) — FastAPI + Redis/RQ backend for systematic strategy backtesting, hyperparameter optimization, and signal generation
-
-The GUI connects to the engine via the `ModelEngine` facade class. The engine can also run standalone via CLI or as a Docker service.
+- `stock_bot.py` starts the PyQt6 desktop GUI in `gui/`.
+- `CLI.py` is the primary command-line interface for strategy work.
+- `engine/` contains the model engine, FastAPI/RQ daemon, data broker, features,
+  backtester, trainer, and tests.
+- `strategies/<name>/` contains each strategy workspace:
+  `manifest.json`, generated `context.py`, user-authored `model.py`, and optional
+  local helper modules.
+- `data/` contains local SQLite market/cache state and is not committed.
 
 ## Quick Start
 
-### Desktop Application
 ```bash
 uv sync
 uv run python stock_bot.py
 ```
 
-### Research Engine (CLI)
+## CLI
+
+Run CLI commands from the repo root:
+
 ```bash
-cd engine
-uv sync
-
-# Backtest a strategy
-uv run python main.py BACKTEST --strategy rsi_divergence --ticker AAPL --interval 1d
-
-# Optimize hyperparameters
-uv run python main.py TRAIN --strategy rsi_divergence --ticker AAPL --interval 1d
-
-# Generate latest signal
-uv run python main.py SIGNAL --strategy rsi_divergence --ticker AAPL
+uv run python CLI.py features
+uv run python CLI.py list
+uv run python CLI.py validate consolidation_breakout
+uv run python CLI.py backtest consolidation_breakout --tickers AAPL --interval 1d --start 2020-01-01
+uv run python CLI.py train ml_regime_hybrid --tickers AAPL,MSFT --interval 1d
+uv run python CLI.py signal ml_regime_hybrid --tickers AAPL
 ```
 
-### Research Engine (Docker — full stack)
-```bash
-cd engine
-docker compose up -d          # starts Redis + FastAPI + RQ Worker
-docker compose logs -f        # tail logs
-docker compose down           # stop
-```
+See [CLI.md](CLI.md) for the full command reference.
 
 ## Strategy Development
 
-Strategies live in `engine/strategies/<name>/` and follow a three-file contract:
-
-1. **`manifest.json`** — declare which features you need and what hyperparameters exist
-2. **`context.py`** — auto-generated typed dataclass from the manifest (never edit manually)
-3. **`model.py`** — your logic: implement `generate_signals()` returning a `pd.Series` in `[-1.0, 1.0]`
-
-Scaffold a new strategy:
-```bash
-cd engine
-uv run python main.py INIT --strategy my_strategy
-# edit engine/strategies/my_strategy/model.py
-uv run python main.py BACKTEST --strategy my_strategy --ticker SPY --interval 1d
-```
-
-After changing `manifest.json`, regenerate the context:
-```bash
-uv run python main.py SYNC --strategy my_strategy
-```
-
-## Technical Stack
-
-| Layer | Technology |
-|---|---|
-| GUI | PyQt6, pyqtgraph |
-| Data | Pandas, NumPy, SQLAlchemy (SQLite), yfinance |
-| API | FastAPI, uvicorn |
-| Job queue | Redis, RQ |
-| Optimization | Optuna, CPCV (Combinatorial Purged Cross-Validation) |
-| ML | scikit-learn, XGBoost, SciPy |
-| Environment | Python 3.13+, uv |
-
-## Project Structure
-
-```
-stock_bot/
-├── stock_bot.py              # GUI entry point
-├── CLI.py                    # legacy data-sync CLI (bulk yfinance downloads)
-├── src/
-│   ├── gui.py                # ChartWindow (main PyQt6 app)
-│   ├── gui_components/       # modular UI panels (charts, controls, signals)
-│   ├── features/             # indicator implementations for GUI overlays
-│   └── signals/              # signal event models
-├── engine/                   # research engine (separate package: model-engine)
-│   ├── __init__.py           # ModelEngine facade + public API
-│   ├── main.py               # CLI entry point
-│   ├── core/                 # backtester, controller, features, metrics, workspace
-│   ├── daemon/               # FastAPI server + RQ worker
-│   ├── strategies/           # user strategy workspaces
-│   └── tests/                # pytest suite (run via Docker)
-└── data/                     # SQLite market database
-```
-
-## Installation
-
-Requires [uv](https://docs.astral.sh/uv/).
+Create and edit strategies through `CLI.py` or the GUI:
 
 ```bash
-git clone <repo>
-cd stock_bot
-uv sync           # installs GUI + engine deps
+uv run python CLI.py init my_strategy
+uv run python CLI.py edit my_strategy --add-feature RSI --feature-params period=14
+uv run python CLI.py show-context my_strategy
+uv run python CLI.py validate my_strategy
 ```
 
-For the Docker stack, also install [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+After changing `manifest.json`, regenerate `context.py`:
+
+```bash
+uv run python CLI.py sync my_strategy
+```
+
+`manifest.json` is source and should be tracked. `context.py` is generated but
+tracked so strategies remain readable. `artifacts.joblib`, `diagnostics.json`,
+`gui_prefs.json`, logs, caches, and databases are generated outputs.
+
+## Docker Engine Stack
+
+Run from `engine/`:
+
+```bash
+docker compose up -d
+docker compose logs -f
+docker compose down
+```
+
+The compose file mounts root `strategies/` at `/code/strategies` and root
+`data/` at `/code/data`, so API/worker jobs use the same strategy workspace and
+database as the CLI/GUI.
+
+## Testing
+
+The canonical test path is Docker from `engine/`:
+
+```bash
+docker compose --profile test up -d pytest
+docker exec research_tester uv run pytest tests/
+```
+
+Local smoke checks can use the existing virtualenv or `uv run` from the repo
+root, but Docker is the source of truth for CI-like validation.

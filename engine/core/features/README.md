@@ -444,7 +444,7 @@ The GUI does not need per-feature rendering code. For each feature:
 ### 2. Run SYNC to regenerate context.py
 
 ```bash
-uv run python main.py SYNC --strategy my_strategy
+uv run python CLI.py sync my_strategy
 ```
 
 This generates a typed `context.py`:
@@ -481,7 +481,7 @@ class SignalModel:
 ### 4. Backtest
 
 ```bash
-uv run python main.py BACKTEST --strategy my_strategy --ticker AAPL --interval 1d
+uv run python CLI.py backtest my_strategy --tickers AAPL --interval 1d
 ```
 
 The engine will:
