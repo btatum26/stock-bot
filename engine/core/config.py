@@ -1,13 +1,17 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
-
 # Repo root is two directories up from this file (engine/core/config.py)
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ENGINE_ROOT = os.path.join(_REPO_ROOT, "engine")
+
+load_dotenv(os.path.join(_ENGINE_ROOT, ".env"))
 
 class Config:
     """Central configuration for the Research Engine."""
+
+    REPO_ROOT = os.getenv("REPO_ROOT", _REPO_ROOT)
+    ENGINE_ROOT = os.getenv("ENGINE_ROOT", _ENGINE_ROOT)
 
     # API Settings - Default to localhost for single-machine setups
     # Can be overridden via environment variables for WSL2 or remote setups
@@ -23,8 +27,11 @@ class Config:
 
     STRATEGIES_FOLDER = os.getenv(
         "STRATEGIES_FOLDER",
-        os.path.join(_REPO_ROOT, "strategies")
+        os.path.join(REPO_ROOT, "strategies")
     )
+    DATA_DIR = os.getenv("DATA_DIR", os.path.join(REPO_ROOT, "data"))
+    DB_PATH = os.getenv("DB_PATH", os.path.join(DATA_DIR, "stocks.db"))
+    LOG_DIR = os.getenv("LOG_DIR", os.path.join(ENGINE_ROOT, "logs"))
     
     @property
     def api_url(self):

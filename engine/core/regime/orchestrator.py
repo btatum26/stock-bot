@@ -25,7 +25,7 @@ from .base import REGIME_REGISTRY, RegimeContext
 from .bocpd import BayesianCPD
 from ..data_broker.fetcher import DataFetcher
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("model-engine.core.regime.orchestrator")
 
 # External tickers fetched for macro features (HYG removed; credit spread comes from FRED)
 _MACRO_TICKERS = ["^VIX", "^VIX3M", "SPY"]

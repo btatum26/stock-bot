@@ -50,7 +50,7 @@ class ArtifactManager:
             joblib.dump(artifacts, file_path)
             logger.info(f"Successfully saved {len(artifacts)} artifacts to {file_path}")
         except Exception as e:
-            logger.error(f"Failed to serialize artifacts to {file_path}: {e}")
+            logger.error(f"Failed to serialize artifacts to {file_path}: {e}", exc_info=True)
             raise IOError(f"Artifact serialization failed: {e}")
 
     @staticmethod
@@ -88,5 +88,5 @@ class ArtifactManager:
             logger.info(f"Successfully loaded artifacts from {file_path}")
             return artifacts
         except Exception as e:
-            logger.error(f"Failed to load artifacts from {file_path}: {e}")
+            logger.error(f"Failed to load artifacts from {file_path}: {e}", exc_info=True)
             raise IOError(f"Artifact deserialization failed: {e}")

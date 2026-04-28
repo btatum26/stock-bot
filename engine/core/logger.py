@@ -2,9 +2,10 @@ import logging
 import logging.handlers
 import os
 
-# Anchor log dir to this file's location so the path is stable regardless of CWD.
-# In Docker (WORKDIR=/code/engine): resolves to /code/engine/logs/
-_LOG_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs"))
+from .config import config
+
+# Anchor log dir through engine config so Docker, CLI, and GUI all agree.
+_LOG_DIR = os.path.normpath(config.LOG_DIR)
 
 _FMT = "[%(asctime)s] [%(name)s] [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s"
 _DATE_FMT = "%Y-%m-%d %H:%M:%S"
@@ -44,7 +45,7 @@ def _configure():
 
 _configure()
 
-# Public loggers — import these instead of calling getLogger() directly.
+# Public loggers - import these instead of calling getLogger() directly.
 # Child loggers inherit all handlers from model-engine automatically.
 logger = logging.getLogger("model-engine")
 daemon_logger = logging.getLogger("model-engine.daemon")

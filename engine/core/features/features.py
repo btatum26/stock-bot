@@ -29,7 +29,7 @@ def load_features():
             try:
                 importlib.import_module(module_name)
             except Exception as e:
-                logger.error(f"Failed to load feature module {module_name}: {e}")
+                logger.error(f"Failed to load feature module {module_name}: {e}", exc_info=True)
 
 load_features()
 
@@ -93,7 +93,7 @@ class FeatureCache:
                 self._raise_memory_violation(feature_id, is_dependency=True)
             raise e
         except Exception as e:
-            logger.error(f"Error computing feature {feature_id}: {e}")
+            logger.error(f"Error computing feature {feature_id}: {e}", exc_info=True)
             raise FeatureError(f"Feature computation failed for {feature_id}")
 
         if len(df.columns) != initial_col_count:
@@ -211,7 +211,7 @@ class FeatureOrchestrator:
                     self._raise_memory_violation(feature_id)
                 raise e
             except Exception as e:
-                logger.error(f"Orchestrator failed to compute feature {feature_id}: {e}")
+                logger.error(f"Orchestrator failed to compute feature {feature_id}: {e}", exc_info=True)
                 raise FeatureError(f"Feature computation failed for {feature_id}")
 
             if len(df.columns) != initial_col_count:

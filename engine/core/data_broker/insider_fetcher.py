@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 import requests
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("model-engine.data.insider_fetcher")
 
 _HEADERS_DATA = {
     "User-Agent": "stock_bot research coolestarr@gmail.com",

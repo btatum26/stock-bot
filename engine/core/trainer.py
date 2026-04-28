@@ -53,7 +53,7 @@ class LocalTrainer:
         "k_test_groups": 2,
         "embargo_pct": 0.01,
         # Multi-ticker training uses walk-forward splits by calendar date.
-        # TODO: Replace with panel-aware CPCV. Current walk-forward is
+        # Current walk-forward is
         # robust to cross-sectional leakage but less sample-efficient,
         # and a single temporal split can still overfit to regime in
         # any one validation window — multiple folds mitigate this.
@@ -82,7 +82,7 @@ class LocalTrainer:
             with open(manifest_path, "r") as f:
                 self.manifest = json.load(f)
         except Exception as e:
-            # TODO: improve logging — add structured exc_info so the full traceback is visible
+            logger.error(f"Failed to load manifest at {manifest_path}: {e}", exc_info=True)
             raise StrategyError(
                 f"Missing or invalid manifest in {self.strategy_dir}: {e}"
             ) from e
@@ -554,24 +554,22 @@ class LocalTrainer:
 
     @staticmethod
     def _print_feature_analysis(analysis: List[Dict[str, Any]]) -> None:
-        """Prints the feature importance / correlation table."""
+        """Logs the feature importance / correlation table."""
         if not analysis:
             return
 
         has_importance = any(r["importance"] is not None for r in analysis)
         has_mi = any(r["mi"] is not None for r in analysis)
 
-        print("\n" + "=" * 78)
-        print(" " * 25 + "FEATURE ANALYSIS (pooled train)")
-        print("=" * 78)
+        lines = ["=" * 78, " " * 25 + "FEATURE ANALYSIS (pooled train)", "=" * 78]
         header = f"  {'Feature':<36}"
         if has_importance:
             header += f" {'Importance':>11}"
         header += f" {'Pearson':>9} {'Spearman':>10}"
         if has_mi:
             header += f" {'MI':>8}"
-        print(header)
-        print("  " + "-" * 76)
+        lines.append(header)
+        lines.append("  " + "-" * 76)
 
         for r in analysis:
             line = f"  {r['name'][:36]:<36}"
@@ -591,9 +589,10 @@ class LocalTrainer:
             if has_mi:
                 mi = r["mi"]
                 line += f" {mi:>8.4f}" if mi is not None else f" {'N/A':>8}"
-            print(line)
+            lines.append(line)
 
-        print("=" * 78 + "\n")
+        lines.append("=" * 78)
+        logger.info("\n%s", "\n".join(lines))
 
     # ------------------------------------------------------------------
     # Results aggregation
@@ -788,50 +787,48 @@ class LocalTrainer:
         val_metrics: Dict[str, Any],
         split_info: Dict[str, Any],
     ) -> None:
-        """Prints a formatted training report to the console.
+        """Logs a formatted training report.
 
         Args:
             train_metrics: Scalar metrics from the training set.
             val_metrics: Scalar metrics from the validation set.
             split_info: Metadata about the data split used.
         """
-        print("\n" + "=" * 55)
-        print(" " * 15 + "TRAINING REPORT")
-        print("=" * 55)
+        lines = ["=" * 55, " " * 15 + "TRAINING REPORT", "=" * 55]
 
         # Split info
         method = split_info["method"]
-        print(f"\n  Split Method: {method.upper()}")
+        lines.append(f"\n  Split Method: {method.upper()}")
         if method == "temporal":
-            print(f"  Train Size:   {split_info['train_size']} bars")
-            print(f"  Val Size:     {split_info['val_size']} bars")
-            print(
+            lines.append(f"  Train Size:   {split_info['train_size']} bars")
+            lines.append(f"  Val Size:     {split_info['val_size']} bars")
+            lines.append(
                 f"  Train Range:  {split_info['train_range'][0]}"
                 f" -> {split_info['train_range'][1]}"
             )
-            print(
+            lines.append(
                 f"  Val Range:    {split_info['val_range'][0]}"
                 f" -> {split_info['val_range'][1]}"
             )
         elif method == "walk_forward":
-            print(f"  Folds:        {split_info['n_folds']}")
-            print(f"  Tickers:      {split_info['n_tickers']}")
-            print(f"  Total Rows:   {split_info['n_rows']}")
+            lines.append(f"  Folds:        {split_info['n_folds']}")
+            lines.append(f"  Tickers:      {split_info['n_tickers']}")
+            lines.append(f"  Total Rows:   {split_info['n_rows']}")
         else:
-            print(f"  Folds:        {split_info['n_folds']}")
-            print(
+            lines.append(f"  Folds:        {split_info['n_folds']}")
+            lines.append(
                 f"  Groups:       {split_info['n_groups']} "
                 f"(k={split_info['k_test_groups']})"
             )
             if "n_tickers" in split_info:
-                print(f"  Tickers:      {split_info['n_tickers']}")
-                print(f"  Total Rows:   {split_info['n_rows']}")
+                lines.append(f"  Tickers:      {split_info['n_tickers']}")
+                lines.append(f"  Total Rows:   {split_info['n_rows']}")
 
         # Metrics table
         is_cpcv = isinstance(next(iter(val_metrics.values()), None), dict)
 
-        print(f"\n  {'Metric':<28} {'Train':>12} {'Val':>12}")
-        print("  " + "-" * 54)
+        lines.append(f"\n  {'Metric':<28} {'Train':>12} {'Val':>12}")
+        lines.append("  " + "-" * 54)
 
         for key in val_metrics:
             if is_cpcv:
@@ -842,9 +839,10 @@ class LocalTrainer:
             else:
                 t_str = f"{train_metrics.get(key, 'N/A')}"
                 v_str = f"{val_metrics.get(key, 'N/A')}"
-            print(f"  {key:<28} {t_str:>12} {v_str:>12}")
+            lines.append(f"  {key:<28} {t_str:>12} {v_str:>12}")
 
-        print("\n" + "=" * 55)
+        lines.append("=" * 55)
+        logger.info("\n%s", "\n".join(lines))
 
     # ------------------------------------------------------------------
     # Multi-ticker pipeline
@@ -1416,5 +1414,5 @@ class LocalTrainer:
         except StrategyError:
             raise
         except Exception as e:
-            # TODO: improve logging — add structured exc_info so the full traceback is visible
+            logger.error(f"Strategy initialization failed: {e}", exc_info=True)
             raise StrategyError(f"Strategy initialization failed: {e}") from e

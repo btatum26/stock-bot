@@ -8,6 +8,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.pool import NullPool
+from ..config import config
 from ..logger import data_logger as logger
 
 Base = declarative_base()
@@ -44,7 +45,8 @@ class FetchLedger(Base):
 
 
 class Database:
-    def __init__(self, db_path="data/stocks.db"):
+    def __init__(self, db_path=None):
+        db_path = db_path or config.DB_PATH
         try:
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
             

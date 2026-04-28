@@ -20,7 +20,7 @@ from sklearn.preprocessing import StandardScaler
 
 from .base import RegimeDetector, register_regime
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("model-engine.core.regime.hmm")
 
 try:
     from hmmlearn.hmm import GaussianHMM as _GaussianHMM

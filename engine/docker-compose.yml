@@ -31,9 +31,15 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - PYTHONPATH=/code
       - UV_LINK_MODE=copy
+      - STRATEGIES_FOLDER=/code/strategies
+      - DATA_DIR=/code/data
+      - DB_PATH=/code/data/stocks.db
+      - LOG_DIR=/code/engine/logs
     working_dir: /code/engine
     volumes:
       - .:/code/engine
+      - ../strategies:/code/strategies
+      - ../data:/code/data
       - /code/engine/.venv
     depends_on:
       - redis
@@ -52,9 +58,15 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - PYTHONPATH=/code
       - UV_LINK_MODE=copy
+      - STRATEGIES_FOLDER=/code/strategies
+      - DATA_DIR=/code/data
+      - DB_PATH=/code/data/stocks.db
+      - LOG_DIR=/code/engine/logs
     working_dir: /code/engine
     volumes:
       - .:/code/engine
+      - ../strategies:/code/strategies
+      - ../data:/code/data
       - /code/engine/.venv
     depends_on:
       - redis
@@ -78,11 +90,16 @@ services:
       - PYTHONPATH=/code
       - TEST_MODE=true
       - UV_LINK_MODE=copy
+      - STRATEGIES_FOLDER=/code/strategies
+      - DATA_DIR=/code/data
+      - DB_PATH=/code/data/stocks.db
+      - LOG_DIR=/code/engine/logs
     working_dir: /code/engine
     volumes:
       - .:/code/engine
+      - ../strategies:/code/strategies
+      - ../data:/code/data
       - /code/engine/.venv
-      - ./data:/code/engine/data
     depends_on:
       - redis
     # Keep the container alive indefinitely

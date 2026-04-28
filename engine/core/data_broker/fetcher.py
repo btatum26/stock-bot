@@ -55,7 +55,7 @@ class DataFetcher:
             return self._sanitize_dataframe(df[['timestamp', 'open', 'high', 'low', 'close', 'volume']])
         
         except Exception as e:
-            logger.error(f"Failed to fetch OHLCV for {ticker}: {e}")
+            logger.error(f"Failed to fetch OHLCV for {ticker}: {e}", exc_info=True)
             raise e
 
     @retry(wait=wait_exponential(multiplier=2, min=4, max=10), stop=stop_after_attempt(3))
@@ -88,7 +88,7 @@ class DataFetcher:
                 "total_cash": None
             }
         except Exception as e:
-            logger.error(f"Alpha Vantage fallback failed for {ticker}: {e}")
+            logger.error(f"Alpha Vantage fallback failed for {ticker}: {e}", exc_info=True)
             return {}
 
     def fetch_macro_data(self, indicator: str, start: str, end: str) -> pd.DataFrame:
@@ -130,5 +130,5 @@ class DataFetcher:
             return self._sanitize_dataframe(df)
 
         except Exception as e:
-            logger.error(f"Failed to fetch direct FRED data for {indicator}: {e}")
+            logger.error(f"Failed to fetch direct FRED data for {indicator}: {e}", exc_info=True)
             return pd.DataFrame()

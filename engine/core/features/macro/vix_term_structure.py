@@ -4,7 +4,7 @@ import pandas as pd
 import yfinance as yf
 from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("model-engine.features.macro.vix_term_structure")
 
 
 @register_feature("VIXTermStructure")

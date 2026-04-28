@@ -287,16 +287,15 @@ class Tearsheet:
 
     @staticmethod
     def print_summary(metrics: Dict[str, Any]):
-        """Outputs scalar metrics to the console in a clean ASCII table."""
+        """Logs scalar metrics in a compact report."""
         skip = {"equity_curve", "portfolio", "bh_portfolio", "trade_log"}
-        print("\n" + "=" * 40)
-        print(" " * 10 + "STRATEGY PERFORMANCE")
-        print("=" * 40)
+        lines = ["=" * 40, " " * 10 + "STRATEGY PERFORMANCE", "=" * 40]
         for key, value in metrics.items():
             if key in skip:
                 continue
-            print(f"{key:<28}: {value}")
-        print("=" * 40 + "\n")
+            lines.append(f"{key:<28}: {value}")
+        lines.append("=" * 40)
+        logger.info("\n%s", "\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +328,7 @@ class LocalBacktester:
             with open(self.manifest_path, 'r') as f:
                 self.manifest = json.load(f)
         except Exception as e:
-            logger.error(f"Failed to load manifest at {self.manifest_path}: {e}")
+            logger.error(f"Failed to load manifest at {self.manifest_path}: {e}", exc_info=True)
             raise StrategyError(f"Missing or invalid manifest in {self.strategy_dir}")
 
     def _load_user_model_and_context(self) -> Tuple[type, Optional[type]]:
@@ -384,7 +383,7 @@ class LocalBacktester:
 
             raise StrategyError(f"No valid SignalModel subclass found in {model_path}")
         except Exception as e:
-            logger.error(f"Failed to load strategy components: {e}")
+            logger.error(f"Failed to load strategy components: {e}", exc_info=True)
             raise StrategyError(f"Strategy initialization failed: {e}")
 
     def _audit_nans(self, df: pd.DataFrame, feature_ids: List[str]):
@@ -580,7 +579,7 @@ class LocalBacktester:
             return clean_signals
 
         except Exception as e:
-            logger.error(f"Backtest execution failed: {e}")
+            logger.error(f"Backtest execution failed: {e}", exc_info=True)
             raise StrategyError(f"Backtest run failed: {e}")
 
     def run_grid_search(self, raw_data: pd.DataFrame, param_bounds: Optional[Dict[str, List[Any]]] = None) -> List[pd.Series]:
@@ -633,7 +632,7 @@ class LocalBacktester:
 
             return results
         except Exception as e:
-            logger.error(f"Grid search failed: {e}")
+            logger.error(f"Grid search failed: {e}", exc_info=True)
             raise StrategyError(f"Grid search failed: {e}")
 
     def run_batch(
@@ -698,7 +697,7 @@ class LocalBacktester:
                         self._audit_nans(df_clean, feature_ids)
                         processed[ticker] = df_clean
                     except Exception as e:
-                        logger.error(f"Feature computation failed for {ticker}: {e}")
+                        logger.error(f"Feature computation failed for {ticker}: {e}", exc_info=True)
 
                 if not processed:
                     return results
@@ -725,7 +724,7 @@ class LocalBacktester:
                                 raw_signals, processed[ticker].index, comp_mode
                             )
                         except Exception as e:
-                            logger.error(f"Signal validation failed for {ticker}: {e}")
+                            logger.error(f"Signal validation failed for {ticker}: {e}", exc_info=True)
                             results[ticker] = pd.Series(dtype=float)
                 return results
 
@@ -803,13 +802,13 @@ class LocalBacktester:
 
                     results[ticker] = signals
                 except Exception as e:
-                    logger.error(f"Batch execution failed for {ticker}: {e}")
+                    logger.error(f"Batch execution failed for {ticker}: {e}", exc_info=True)
                     results[ticker] = pd.Series(dtype=float)
 
             return results
 
         except Exception as e:
-            logger.error(f"Batch setup failed: {e}")
+            logger.error(f"Batch setup failed: {e}", exc_info=True)
             raise StrategyError(f"Batch run failed: {e}")
 
 
@@ -866,7 +865,7 @@ class SignalValidator:
             else:
                 signals = raw_signals.copy()
         except Exception as e:
-            logger.error(f"Could not convert raw signals to pandas Series: {e}")
+            logger.error(f"Could not convert raw signals to pandas Series: {e}", exc_info=True)
             raise StrategyError("User model must return a list, numpy array, or pandas Series.")
 
         # 2. Convert types to float, coercing strings/garbage to NaN

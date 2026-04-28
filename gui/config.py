@@ -3,9 +3,11 @@ Centralized configuration for the GUI layer.
 Edit these values to customize paths, timings, and layout constants.
 """
 
+from engine.core.config import config as ENGINE_CONFIG
+
 # --- Engine paths (resolved relative to the repo root) ---
-WORKSPACE_DIR = "./strategies"
-DB_PATH = "data/stocks.db"
+WORKSPACE_DIR = ENGINE_CONFIG.STRATEGIES_FOLDER
+DB_PATH = ENGINE_CONFIG.DB_PATH
 
 # --- Debounce timings (milliseconds) ---
 LOAD_DEBOUNCE_MS = 800    # delay after ticker input before chart fetch

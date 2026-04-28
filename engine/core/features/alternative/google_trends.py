@@ -24,7 +24,7 @@ from typing import Dict, Any, List
 import pandas as pd
 from ..base import Feature, FeatureResult, OutputSchema, OutputType, Pane, register_feature
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("model-engine.features.alternative.google_trends")
 
 # In-process cache keyed by (ticker, start, end)
 _trends_cache: Dict[str, pd.Series] = {}

@@ -33,11 +33,12 @@ if _ROOT not in sys.path:
 
 from engine import ModelEngine
 from engine.core.exceptions import StrategyError, ValidationError
+from engine.core.config import config
 from engine.core.universes import get_universe, list_universes
 
 # ── Paths (mirror gui/config.py) ──────────────────────────────────────────────
-WORKSPACE_DIR = os.path.join(_ROOT, "strategies")
-DB_PATH       = os.path.join(_ROOT, "data", "stocks.db")
+WORKSPACE_DIR = config.STRATEGIES_FOLDER
+DB_PATH       = config.DB_PATH
 
 # ── Formatting ────────────────────────────────────────────────────────────────
 WIDTH = 64
@@ -278,8 +279,8 @@ def cmd_init(engine: ModelEngine, args) -> None:
     print(f"[+] Created strategy: {name}")
     print(f"    {dest}")
     print(f"\n  Edit the manifest, then run:")
-    print(f"    python research_cli.py inspect {name}")
-    print(f"    python research_cli.py edit {name} --add-feature <ID> --feature-params k=v ...")
+    print(f"    python CLI.py inspect {name}")
+    print(f"    python CLI.py edit {name} --add-feature <ID> --feature-params k=v ...")
 
 
 def cmd_edit(engine: ModelEngine, args) -> None:
@@ -801,7 +802,7 @@ def cmd_show_context(engine: ModelEngine, args) -> None:
     path = os.path.join(WORKSPACE_DIR, args.strategy, "context.py")
     if not os.path.exists(path):
         print(f"  context.py not found at {path}")
-        print(f"  Run: python research_cli.py edit {args.strategy}  (any edit triggers a sync)")
+        print(f"  Run: python CLI.py edit {args.strategy}  (any edit triggers a sync)")
         sys.exit(1)
     _header(f"context.py  --  {args.strategy}")
     print()
@@ -1679,7 +1680,7 @@ def build_parser() -> argparse.ArgumentParser:
     method where possible.
     """
     parser = argparse.ArgumentParser(
-        prog="research_cli.py",
+        prog="CLI.py",
         description="Research Engine CLI -- mirrors GUI access via ModelEngine",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
